@@ -70,6 +70,69 @@ function mix(aHex: string, bHex: string, t: number) {
   return rgbToHex(r, g, b2);
 }
 
+/* --- New helpers for gradient opacity & CSS --- */
+type Stop = { id: string; position: number; color: string };
+
+function hexToRgbaString(hex: string, alphaPct: number) {
+  const rgb = hexToRgb(hex);
+  const a = clamp(alphaPct / 100, 0, 1);
+  if (!rgb) return `rgba(0,0,0,${a})`;
+  return `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, ${a})`;
+}
+
+function stopsToCss(stops: Stop[], opacity: number) {
+  const s = [...stops].sort((a, b) => a.position - b.position);
+  return s
+    .map((st) => `${hexToRgbaString(st.color, opacity)} ${st.position}%`)
+    .join(", ");
+}
+
+type GType =
+  | "Linear"
+  | "Radial"
+  | "Conic"
+  | "Diamond"
+  | "Reflected"
+  | "Multi-Point";
+
+function buildGradientCss(
+  type: GType,
+  angle: number,
+  stops: Stop[],
+  opacity: number
+) {
+  const sorted = [...stops].sort((a, b) => a.position - b.position);
+  const list = stopsToCss(sorted, opacity);
+
+  switch (type) {
+    case "Conic":
+      return `conic-gradient(from ${angle}deg, ${list})`;
+    case "Radial":
+      return `radial-gradient(${list})`;
+    case "Diamond":
+      return `radial-gradient(closest-side at 50% 50%, ${list})`;
+    case "Reflected": {
+      // Mirror the stops around center for a symmetric look
+      const mirror = sorted
+        .slice(0, sorted.length - 1)
+        .concat(
+          sorted
+            .slice()
+            .reverse()
+            .map((st) => ({ ...st, position: 100 - st.position }))
+        )
+        .sort((a, b) => a.position - b.position);
+      const mirroredList = stopsToCss(mirror, opacity);
+      return `linear-gradient(${angle}deg, ${mirroredList})`;
+    }
+    case "Multi-Point":
+      // treat as multi-stop linear; UI manages as many stops as the user wants.
+      return `linear-gradient(${angle}deg, ${list})`;
+    default:
+      return `linear-gradient(${angle}deg, ${list})`;
+  }
+}
+
 type ToolId =
   | "move"
   | "brush"
@@ -345,7 +408,7 @@ export default function LeftSidebar({
     if (showColorPicker && onColorChange) {
       onColorChange(currentHex);
     }
-  }, [showColorPicker, currentHex]);
+  }, [showColorPicker, currentHex, onColorChange]);
 
   const demoLayers = Array.from({ length: 9 }, (_, i) => `Layer ${i + 1}`);
 
@@ -1554,15 +1617,7 @@ function StarGlyph() {
   );
 }
 
-/* ================== GRADIENT PANEL ================== */
-
-type GType =
-  | "Linear"
-  | "Radial"
-  | "Conic"
-  | "Diamond"
-  | "Reflected"
-  | "Multi-Point";
+/* ================== GRADIENT PANEL (multi-stop) ================== */
 
 function GradientPanelExact({
   onDragStart,
@@ -1580,28 +1635,64 @@ function GradientPanelExact({
   }) => void;
 }) {
   const [t, setT] = React.useState<GType>("Linear");
-  const [c1, setC1] = React.useState("#7c7ff5");
-  const [c2, setC2] = React.useState("#ffffff");
-  const [mid, setMid] = React.useState(50);
+
+  // Multi-stop (start/end pinned)
+  const [stops, setStops] = React.useState<Stop[]>([
+    { id: "s0", position: 0, color: "#7c7ff5" },
+    { id: "s1", position: 100, color: "#ffffff" },
+  ]);
+  const [selectedId, setSelectedId] = React.useState<string>("s0");
+
   const [angle, setAngle] = React.useState(238);
   const [opacity, setOpacity] = React.useState(97);
   const [preview, setPreview] = React.useState(false);
 
-  // ---- LIVE PREVIEW WIRING (rAF-throttled) ----
-  const rafId = React.useRef<number | null>(null);
+  const sortedStops = React.useMemo(
+    () => [...stops].sort((a, b) => a.position - b.position),
+    [stops]
+  );
+  const selectedStop = React.useMemo(
+    () => sortedStops.find((s) => s.id === selectedId) ?? sortedStops[0],
+    [sortedStops, selectedId]
+  );
 
+  const updateStopColor = (id: string, color: string) => {
+    setStops((prev) => prev.map((s) => (s.id === id ? { ...s, color } : s)));
+  };
+
+  const addStop = () => {
+    // Insert between selected and right neighbor (or midpoint to 100 if none)
+    const idx = sortedStops.findIndex((s) => s.id === selectedStop.id);
+    const left = sortedStops[idx];
+    const right = sortedStops[idx + 1] ?? { position: 100, color: left.color };
+    const pos = Math.round((left.position + right.position) / 2);
+    const col = mix(left.color, right.color, 0.5);
+    const id = crypto.randomUUID();
+    setStops((prev) => [...prev, { id, position: pos, color: col }]);
+    setSelectedId(id);
+  };
+
+  // ---- LIVE PREVIEW (rAF-throttled) ----
+  const rafId = React.useRef<number | null>(null);
   const pushPreview = React.useCallback(() => {
     if (!onGradientApply) return;
+    const first = sortedStops[0];
+    const last = sortedStops[sortedStops.length - 1];
+
+    // pick the stop nearest to 50% as "mid" for backward compatibility
+    const midStop = sortedStops.reduce((acc, s) =>
+      Math.abs(s.position - 50) < Math.abs(acc.position - 50) ? s : acc
+    );
     onGradientApply({
       type: t,
-      c1,
-      c2,
-      mid,
+      c1: first.color,
+      c2: last.color,
+      mid: midStop.position,
       angle,
       opacity,
       preview: true,
     });
-  }, [onGradientApply, t, c1, c2, mid, angle, opacity]);
+  }, [onGradientApply, t, sortedStops, angle, opacity]);
 
   React.useEffect(() => {
     if (!preview) return;
@@ -1611,50 +1702,10 @@ function GradientPanelExact({
       if (rafId.current != null) cancelAnimationFrame(rafId.current);
       rafId.current = null;
     };
-    // Fires on toggle + any param change while preview is ON
-  }, [preview, t, c1, c2, mid, angle, opacity, pushPreview]);
+  }, [preview, stops, t, angle, opacity, pushPreview]);
+  // --------------------------------------
 
-  // ---------------------------------------------
-
-  const base =
-    t === "Radial"
-      ? `radial-gradient(${c1} 0%, ${mix(
-          c1,
-          c2,
-          mid / 100
-        )} ${mid}%, ${c2} 100%)`
-      : t === "Conic"
-      ? `conic-gradient(from ${angle}deg, ${c1} 0%, ${mix(
-          c1,
-          c2,
-          mid / 100
-        )} ${mid}%, ${c2} 100%)`
-      : t === "Diamond"
-      ? `radial-gradient(closest-side at 50% 50%, ${c1} 0%, ${mix(
-          c1,
-          c2,
-          mid / 100
-        )} ${mid}%, ${c2} 100%)`
-      : t === "Reflected"
-      ? `linear-gradient(${angle}deg, ${c1} 0%, ${mix(
-          c1,
-          c2,
-          mid / 100
-        )} ${mid}%, ${c2} 100%, ${mix(c1, c2, mid / 100)} ${
-          100 - mid
-        }%, ${c1} 100%)`
-      : t === "Multi-Point"
-      ? `linear-gradient(${angle}deg, ${c1} 0%, ${mix(c1, c2, 0.35)} 35%, ${mix(
-          c1,
-          c2,
-          0.7
-        )} 70%, ${c2} 100%)`
-      : `linear-gradient(${angle}deg, ${c1} 0%, ${mix(
-          c1,
-          c2,
-          mid / 100
-        )} ${mid}%, ${c2} 100%)`;
-
+  const base = buildGradientCss(t, angle, sortedStops, opacity);
   const types: GType[] = [
     "Linear",
     "Radial",
@@ -1692,7 +1743,14 @@ function GradientPanelExact({
           >
             <span
               className="h-[22px] w-[36px] rounded-[6px]"
-              style={{ background: demoChip(gt, c1, c2, angle) }}
+              style={{
+                background: demoChip(
+                  gt,
+                  sortedStops[0].color,
+                  sortedStops[sortedStops.length - 1].color,
+                  angle
+                ),
+              }}
             />
             <span className="mt-1 text-[10px] leading-[11px] text-[#5e5e5e] text-center">
               {gt.replace("-", " ")}
@@ -1702,22 +1760,48 @@ function GradientPanelExact({
       </div>
 
       <div className="text-[12px] text-[#8a8a8a] mt-4">Gradient Bar</div>
-      <SingleGradientBar
-        c1={c1}
-        c2={c2}
-        mid={mid}
-        setMid={setMid}
+      <GradientStopsBar
         background={base}
+        stops={sortedStops}
+        selectedId={selectedId}
+        onSelect={setSelectedId}
+        onMove={(id, nextPct) => {
+          const idx = sortedStops.findIndex((s) => s.id === id);
+          const isEdge = idx === 0 || idx === sortedStops.length - 1;
+          const min = idx === 0 ? 0 : sortedStops[idx - 1].position + 1;
+          const max =
+            idx === sortedStops.length - 1
+              ? 100
+              : sortedStops[idx + 1].position - 1;
+          const clamped = isEdge
+            ? idx === 0
+              ? 0
+              : 100
+            : clampNum(nextPct, min, max);
+          setStops((prev) =>
+            prev.map((s) => (s.id === id ? { ...s, position: clamped } : s))
+          );
+        }}
+        onRemove={(id) => {
+          const idx = sortedStops.findIndex((s) => s.id === id);
+          if (idx === 0 || idx === sortedStops.length - 1) return; // keep endpoints
+          setStops((prev) => prev.filter((s) => s.id !== id));
+          setSelectedId(sortedStops[Math.max(0, idx - 1)].id);
+        }}
       />
 
       <div className="text-[12px] text-[#8a8a8a] mt-4">Color Picker</div>
       <div className="mt-2 flex items-center gap-3">
-        <SquareColor value={c1} onChange={setC1} />
+        {/* Selected stop color editor */}
+        <SquareColor
+          value={selectedStop.color}
+          onChange={(v) => updateStopColor(selectedStop.id, v)}
+        />
         <MiniSlash />
-        <SquareColor value={c2} onChange={setC2} />
         <button
           className="ml-auto h-8 w-8 rounded-md bg-white border border-[#d0d0d0] grid place-items-center"
           title="Add stop"
+          onClick={addStop}
         >
           <span className="text-[18px] leading-none text-[#6b6b6b]">+</span>
         </button>
@@ -1754,16 +1838,21 @@ function GradientPanelExact({
           Preview Live
         </label>
 
-        {/* Commit-only: always preview: false on apply */}
         <button
           className="px-4 py-2 rounded-[10px] text-white text-[12px] font-semibold shadow-sm"
           style={{ background: "linear-gradient(180deg, #9aa0ff, #7C7FF5)" }}
           onClick={() => {
-            onGradientApply?.({
+            if (!onGradientApply) return;
+            const first = sortedStops[0];
+            const last = sortedStops[sortedStops.length - 1];
+            const midStop = sortedStops.reduce((acc, s) =>
+              Math.abs(s.position - 50) < Math.abs(acc.position - 50) ? s : acc
+            );
+            onGradientApply({
               type: t,
-              c1,
-              c2,
-              mid,
+              c1: first.color,
+              c2: last.color,
+              mid: midStop.position,
               angle,
               opacity,
               preview: false,
@@ -1777,39 +1866,41 @@ function GradientPanelExact({
   );
 }
 
-function SingleGradientBar({
-  c1,
-  c2,
-  mid,
-  setMid,
+function GradientStopsBar({
   background,
+  stops,
+  selectedId,
+  onSelect,
+  onMove,
+  onRemove,
 }: {
-  c1: string;
-  c2: string;
-  mid: number;
-  setMid: (n: number) => void;
   background: string;
+  stops: Stop[];
+  selectedId: string;
+  onSelect: (id: string) => void;
+  onMove: (id: string, nextPct: number) => void;
+  onRemove: (id: string) => void;
 }) {
   const barRef = React.useRef<HTMLDivElement | null>(null);
-  const [dragging, setDragging] = React.useState(false);
+  const [dragId, setDragId] = React.useState<string | null>(null);
 
-  const pctFromEvent = (clientX: number) => {
+  const pctFromClientX = (clientX: number) => {
     const rect = barRef.current!.getBoundingClientRect();
     const x = clampNum(clientX - rect.left, 0, rect.width);
     return Math.round((x / rect.width) * 100);
   };
 
   React.useEffect(() => {
-    if (!dragging) return;
-    const move = (e: MouseEvent) => setMid(pctFromEvent(e.clientX));
-    const up = () => setDragging(false);
+    if (!dragId) return;
+    const move = (e: MouseEvent) => onMove(dragId, pctFromClientX(e.clientX));
+    const up = () => setDragId(null);
     window.addEventListener("mousemove", move);
     window.addEventListener("mouseup", up);
     return () => {
       window.removeEventListener("mousemove", move);
       window.removeEventListener("mouseup", up);
     };
-  }, [dragging, setMid]);
+  }, [dragId, onMove]);
 
   return (
     <div className="mt-2">
@@ -1817,18 +1908,44 @@ function SingleGradientBar({
         ref={barRef}
         className="h-[8px] rounded-full relative border border-[#d0d0d0]"
         style={{ background }}
-        onMouseDown={(e) => setMid(pctFromEvent(e.clientX))}
+        onMouseDown={(e) => {
+          const pos = pctFromClientX(e.clientX);
+          const nearest = stops.reduce((acc, s) =>
+            Math.abs(s.position - pos) < Math.abs(acc.position - pos) ? s : acc
+          );
+          onSelect(nearest.id);
+        }}
       >
-        <Handle leftPct={0} color={c1} />
-        <Handle leftPct={100} color={c2} />
-        <div
-          className="absolute -top-[6px] h-4 w-4 rounded-full border border-white shadow cursor-pointer"
-          style={{
-            left: `calc(${mid}% - 8px)`,
-            background: mix(c1, c2, mid / 100),
-          }}
-          onMouseDown={() => setDragging(true)}
-        />
+        {stops.map((s, idx) => {
+          const isSelected = s.id === selectedId;
+          const isEdge = idx === 0 || idx === stops.length - 1;
+          return (
+            <button
+              key={s.id}
+              className={[
+                "absolute -top-[6px] h-4 w-4 rounded-full border border-white shadow",
+                isSelected ? "ring-2 ring-[#8B0000]" : "",
+              ].join(" ")}
+              style={{
+                left: `calc(${s.position}% - 8px)`,
+                background: s.color,
+              }}
+              title={`${s.position}%`}
+              onMouseDown={(ev) => {
+                ev.stopPropagation();
+                onSelect(s.id);
+                setDragId(s.id);
+              }}
+              onDoubleClick={(ev) => {
+                ev.preventDefault();
+                if (!isEdge) onRemove(s.id);
+              }}
+            />
+          );
+        })}
+      </div>
+      <div className="mt-1 text-[10px] text-[#737373]">
+        Tip: double‑click a stop (except ends) to remove.
       </div>
     </div>
   );
@@ -1900,16 +2017,6 @@ function RowSlider({
   );
 }
 
-function Handle({ leftPct, color }: { leftPct: number; color: string }) {
-  return (
-    <div
-      className="absolute -top-[6px] h-4 w-4 rounded-full border border-white shadow"
-      style={{ left: `calc(${leftPct}% - 8px)`, background: color }}
-      aria-hidden
-    />
-  );
-}
-
 function SquareColor({
   value,
   onChange,
@@ -1934,23 +2041,8 @@ function SquareColor({
 }
 
 function MiniSlash() {
-  return (
-    <div className="relative h-10 w-[1px] bg-[#d5d5d5] mx-1">
-      <svg
-        width="16"
-        height="16"
-        viewBox="0 0 16 16"
-        className="absolute -left-8 top-1/2 -translate-y-1/2 text-[#7c7ff5]"
-      >
-        <path
-          d="M2 12 L6 4"
-          stroke="currentColor"
-          strokeWidth="1.5"
-          strokeLinecap="round"
-        />
-      </svg>
-    </div>
-  );
+  // Simple neutral divider; removes the previous purple SVG bleed
+  return <div className="h-10 w-[1px] bg-[#d5d5d5] mx-1" />;
 }
 
 function demoChip(t: GType, c1: string, c2: string, angle: number) {
