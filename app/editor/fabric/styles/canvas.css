@@ -1,0 +1,16 @@
+#canvas-wrap{ position:relative; display:grid; place-items:center; background:#f8f8f8; overflow:hidden }
+#design-canvas{ position:absolute; inset:24px }
+
+#ruler-top,#ruler-bottom,#ruler-left,#ruler-right{ position:absolute; pointer-events:none; z-index:5; background:#fff }
+#ruler-top{ top:0; left:24px; right:24px; height:24px }
+#ruler-bottom{ bottom:0; left:24px; right:24px; height:24px }
+#ruler-left{ left:0; top:24px; bottom:24px; width:24px }
+#ruler-right{ right:0; top:24px; bottom:24px; width:24px }
+
+#right-sidebar{ align-self: stretch }
+
+#editor-root{ display:flex; align-items:stretch }
+#canvas-wrap{ flex:1 1 auto }
+#right-sidebar{ width: var(--sidebar-width, 340px); flex:0 0 auto }
+
+

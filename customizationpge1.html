@@ -1,0 +1,912 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Creative Connect – Editor (Layers + Gradients + Color + Shapes + Uploads)</title>
+  <style>
+    :root{
+      --bg:#ededed;             /* app background */
+      --brand:#7a1f18;          /* topbar brick red */
+      --ink:#1f2937;            /* text */
+      --muted:#6b7280;          /* secondary */
+      --surface:#ffffff;        /* cards */
+      --panel:#e9e9e9;          /* canvas backing panel */
+      --border:#e6e6e6;         /* light borders */
+      --dash:#d34c41;           /* red dashed bleed */
+      --shadow:0 10px 25px rgba(0,0,0,.10);
+    }
+
+    *{box-sizing:border-box}
+    html,body{height:100%}
+    body{margin:0; font-family: Inter, system-ui, Segoe UI, Roboto, Helvetica, Arial, sans-serif; color:var(--ink); background:var(--bg)}
+
+    /* GRID LAYOUT */
+    .app{display:grid; grid-template-columns:72px 1fr 360px; grid-template-rows:56px 1fr; height:100vh}
+
+    /* TOP BAR */
+    .topbar{grid-column:1/4; grid-row:1; background:var(--brand); color:#fff; display:flex; align-items:center; gap:14px; padding:0 16px; box-shadow: inset 0 -1px 0 rgba(0,0,0,.15)}
+    .topbar .home-btn{width:36px;height:36px; display:grid; place-items:center; border-radius:8px; background:rgba(255,255,255,.12); cursor:pointer}
+    .brand{margin:0 auto; display:flex; align-items:center; gap:10px; font-weight:700; letter-spacing:.02em}
+    .brand .mark{width:28px;height:28px;border-radius:50%;border:2px solid #fff; display:grid; place-items:center; font-weight:800}
+    .unit{margin-left:auto; padding:6px 10px; border-radius:8px; background:rgba(255,255,255,.15)} .menu{display:flex; align-items:center; gap:16px; font-weight:600; opacity:.9} .menu a{color:#fff; text-decoration:none} .menu a:hover{text-decoration:underline}
+
+    /* LEFT TOOL RAIL */
+    .rail{grid-column:1; grid-row:2; background:#fff; border-right:1px solid var(--border); padding:6px 8px; display:flex; flex-direction:column; gap:10px; overflow:auto}
+    .tool{height:46px; width:100%; border:1px solid var(--border); border-radius:12px; display:grid; place-items:center; background:linear-gradient(#fff,#fafafa); position:relative; cursor:pointer}
+    .tool svg{width:18px;height:18px; opacity:.9}
+    .tool span{position:absolute; bottom:4px; font-size:10px; color:#7d7d7d}
+
+    /* CENTER STAGE */
+    .stage{grid-column:2; grid-row:2; position:relative; display:grid; grid-template-rows:80px 1fr 86px}
+
+    /* FLOATING FORMAT BAR */
+    .format-wrap{display:flex; justify-content:center; align-items:flex-start}
+    .format{margin-top:14px; height:44px; background:#fff; border:1px solid var(--border); border-radius:14px; box-shadow:0 6px 18px rgba(0,0,0,.12); display:flex; align-items:center; gap:10px; padding:0 10px}
+    .dd{border:1px solid var(--border); border-radius:10px; padding:8px 10px; background:#fff}
+    .btn{border:1px solid var(--border); border-radius:10px; padding:8px 10px; background:#fff; font-weight:700; cursor:pointer}
+    .sep{width:1px; height:24px; background:var(--border)}
+
+    /* CANVAS AREA */
+    .canvas{position:relative; margin:0 24px; background:#f7f7f7; border-left:1px solid var(--border); border-right:1px solid var(--border); display:grid; place-items:center; overflow:auto}
+    .board{position:relative; width:min(980px,88%); aspect-ratio:16/9; background:var(--panel); border-radius:10px; box-shadow: inset 0 0 0 1px var(--border)}
+
+    /* rulers */
+    .ruler-h{position:absolute; left:0; right:0; height:44px; top:-44px; background: linear-gradient(#fff,#fff) padding-box, repeating-linear-gradient(to right,#d2d6da 0 1px, transparent 1px 10px) border-box; border:14px solid transparent; border-bottom:none; border-radius:14px 14px 0 0}
+    .ruler-h.bottom{top:auto; bottom:-44px; border-top:none; border-radius:0 0 14px 14px}
+    .ruler-v{position:absolute; top:0; bottom:0; width:44px; left:-44px; background: linear-gradient(#fff,#fff) padding-box, repeating-linear-gradient(to bottom,#d2d6da 0 1px, transparent 1px 10px) border-box; border:14px solid transparent; border-right:none; border-radius:14px 0 0 14px}
+    .ruler-v.right{grid-column:3; grid-row:2; background:#f2f2f2; border-left:1px solid var(--border); display:grid; grid-template-rows:auto 1fr; border-top-left-radius:24px}
+    .tick{position:absolute; top:18px; left:50%; transform:translateX(-50%); width:0; height:0; border-left:6px solid transparent; border-right:6px solid transparent; border-top:10px solid var(--dash)}
+
+    /* bleed + art */
+    .bleed{position:absolute; inset:36px; border:3px dashed var(--dash); border-radius:8px; background:transparent}
+    .art{position:absolute; inset:60px; background:#cfcfcf; border-radius:6px; overflow:hidden}
+
+    /* floating cards */
+    .text-card{position:absolute; left:18px; bottom:18px; width:220px; background:#fff; border:1px solid var(--border); border-radius:14px; box-shadow:var(--shadow); display:none}
+    .text-card.show{display:block}
+    .text-card .hd{padding:10px 12px; font-size:12px; font-weight:800; color:#7a7a7a; border-bottom:1px solid var(--border)}
+    .tiles{display:grid; grid-template-columns:repeat(4,1fr); gap:8px; padding:10px 12px}
+    .tile{height:46px; border:1px solid var(--border); border-radius:10px; display:grid; place-items:center; font-size:10px; color:#808080; background:#fff}
+    .other{border-top:1px solid var(--border); padding:10px 12px; display:grid; gap:8px}
+    .check{display:flex; align-items:center; gap:8px; font-size:12px}
+
+    /* Color Panel */
+    .color-panel{position:absolute; top:18px; left:12px; width:360px; background:#fff; border:1px solid var(--border); border-radius:16px; box-shadow:var(--shadow); display:none}
+    .color-panel.show{display:block}
+    .cp-head{display:flex; align-items:center; gap:10px; padding:14px 16px; border-bottom:1px solid var(--border); font-weight:800; color:#555}
+    .cp-body{padding:14px 16px; display:grid; gap:12px}
+    .cp-row{display:flex; align-items:center; gap:10px}
+    .chip{width:16px;height:16px;border-radius:50%;border:1px solid var(--border)}
+    .swatch-grid{display:flex; gap:10px; flex-wrap:wrap}
+    .swatch{width:28px;height:28px;border-radius:999px;border:1px solid var(--border); cursor:pointer}
+    .grad{height:180px; border-radius:12px; background:linear-gradient(45deg,#fff,#f0f 60%, #000); border:1px solid var(--border); position:relative; overflow:hidden}
+    .grad::after{content:""; position:absolute; inset:0; background:radial-gradient(circle at 8% 90%, rgba(0,0,0,.12), transparent 40%)}
+    .slider{display:flex; align-items:center; gap:10px}
+    .slider label{width:80px; color:#555}
+    .slider input[type="range"]{flex:1}
+    .slider .pct{width:38px; text-align:right; color:#555}
+    .cp-sec-hd{margin-top:6px; font-size:14px; font-weight:800; color:#555}
+
+    /* Gradient Panel */
+    .gradient-panel{position:absolute; top:18px; right:12px; width:360px; background:#fff; border:1px solid var(--border); border-radius:16px; box-shadow:var(--shadow); display:none}
+    .gradient-panel.show{display:block}
+    .gp-head{padding:16px; border-bottom:1px solid var(--border); font-weight:800; color:#6b6b6b; letter-spacing:.02em}
+    .gp-body{padding:14px 16px; display:grid; gap:14px}
+    .g-row{display:grid; gap:10px}
+    .g-types{display:flex; gap:10px; flex-wrap:wrap}
+    .g-type{flex:0 0 auto; width:64px; height:48px; border:1px solid var(--border); border-radius:12px; overflow:hidden; cursor:pointer; display:grid; place-items:end; font-size:11px; color:#5f5f5f; padding:4px}
+    .g-type[data-active="true"]{outline:2px solid #7f8ae6}
+    .bar{height:8px; background:linear-gradient(90deg,#777,#ddd); border-radius:999px; position:relative}
+    .knob{position:absolute; top:-4px; width:16px; height:16px; border-radius:50%; background:#fff; border:1px solid var(--border); box-shadow:var(--shadow); cursor:grab}
+    .cols{display:flex; gap:10px}
+    .cols .cell{flex:1; display:grid; gap:8px}
+    .cols input[type="color"]{width:100%; height:42px; border-radius:10px; border:1px solid var(--border); padding:0}
+    .row-flex{display:flex; align-items:center; gap:10px}
+    .row-flex label{width:120px; color:#555}
+    .row-flex input[type="range"]{flex:1}
+    .ghost{flex:1; padding:12px; border:1px solid var(--border); border-radius:12px; background:#fff; font-weight:700; cursor:pointer}
+    .apply{background:#7f8ae6; color:#fff; border:none; padding:10px 14px; border-radius:12px; font-weight:800; cursor:pointer}
+    .apply:disabled{opacity:.6; cursor:not-allowed}
+
+    /* SHAPES PANEL */
+    .shapes-panel{position:absolute; top:72px; left:12px; width:300px; background:#fff; border:1px solid var(--border); border-radius:16px; box-shadow:var(--shadow); display:none}
+    .shapes-panel.show{display:block}
+    .sp-head{padding:14px 16px; border-bottom:1px solid var(--border); font-weight:800; color:#666}
+    .sp-body{padding:10px 12px; display:grid; gap:10px}
+    .shape-row{display:flex; align-items:center; gap:12px; padding:8px 8px; border:1px solid var(--border); border-radius:12px; cursor:pointer; background:linear-gradient(#fff,#fafafa)}
+    .shape-row:hover{box-shadow:var(--shadow)}
+    .shape-icon{width:28px;height:28px; display:grid; place-items:center}
+    .shape-name{font-weight:600; color:#333}
+
+    /* LAYERS PANEL */
+    .layers-panel{position:absolute; top:18px; right:12px; width:360px; background:#fff; border:1px solid var(--border); border-radius:16px; box-shadow:var(--shadow); display:none}
+    .layers-panel.show{display:block}
+    .layers-head{padding:16px; border-bottom:1px solid var(--border); display:flex; align-items:center; gap:10px; font-weight:800; color:#6b6b6b}
+    .layers-body{max-height:420px; overflow:auto; padding:8px 0}
+    .layer-row{display:grid; grid-template-columns:32px 1fr 28px 28px; align-items:center; gap:8px; padding:10px 12px; border-bottom:1px solid #f1f1f1}
+    .layer-row[draggable="true"]{cursor:grab}
+    .layer-handle{width:20px; height:14px; background:repeating-linear-gradient(90deg,#c8c8c8 0 2px, transparent 2px 4px); border-radius:3px; justify-self:end}
+    .layer-name{font-weight:600; color:#333; white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
+    .layer-btn{width:24px;height:24px; border:1px solid var(--border); border-radius:8px; background:#fff; display:grid; place-items:center; cursor:pointer}
+    .layer-row[data-selected="true"]{background:#f7f9ff}
+    .empty-note{padding:12px 16px; color:#888; font-size:13px}
+
+    /* selection ring */
+    .selected-ring{outline:2px dashed #6a8cff; outline-offset:2px}
+
+    /* bottom mini toolbar */
+    .mini{display:flex; align-items:center; justify-content:center; gap:12px; background:#fff; border-top:1px solid var(--border)}
+    .mini .bar{margin:14px 0; height:46px; background:#f2f2f2; border:1px solid var(--border); border-radius:999px; display:flex; align-items:center; gap:10px; padding:0 12px; min-width:320px}
+    .sw{width:26px;height:26px;border-radius:6px;border:1px solid var(--border)}
+    .sw.b{background:#111}
+    .sw.w{background:#fff; outline:3px solid #e7e7e7}
+
+    /* RIGHT PREVIEW */
+    .right{grid-column:3; grid-row:2; background:#fff; border-left:1px solid var(--border); display:grid; grid-template-rows:auto 1fr}
+    .right .head{padding:18px 18px 12px; color:#6e6e6e; font-weight:800; letter-spacing:.02em; border-bottom:1px solid var(--border); text-align:center}
+    .preview{padding:16px; display:grid; gap:14px}
+    .mock{height:220px; background:#f2f2f2; border:1px dashed #d3d3d3; border-radius:10px}
+    .row{display:flex; gap:12px}
+    .dots{height:4px; background:#eee; border-radius:99px; position:relative}
+    .dots::before,.dots::after{content:""; position:absolute; top:-3px; width:8px; height:8px; background:#111; border-radius:50%}
+    .dots::before{left:22%}
+    .dots::after{right:22%}
+
+    /* RESPONSIVE */
+    @media (max-width:1200px){ .app{grid-template-columns:64px 1fr 320px} .board{width:min(900px,92%)} }
+    @media (max-width:980px){ .app{grid-template-columns:56px 1fr} .right{display:none} }
+
+    /* === Drawn shapes on the artboard === */
+    .shape{position:absolute; border:2px solid #1f2937; background:rgba(0,0,0,.04); border-radius:6px; cursor:move}
+    .shape.circle{border-radius:999px}
+    .shape.polygon{clip-path: polygon(50% 0%, 93% 35%, 76% 90%, 24% 90%, 7% 35%)}
+    .shape.line{height:2px; background:#1f2937; border:none; border-radius:0}
+    .shape.arrow::after{content:""; position:absolute; right:-8px; top:50%; transform:translateY(-50%) rotate(45deg); width:12px; height:12px; border-top:2px solid #1f2937; border-right:2px solid #1f2937; background:transparent}
+
+    /* ================= UPLOADS PANEL ================= */
+    .uploads-panel{position:fixed; inset:0; display:none; z-index:40}
+    .uploads-panel.show{display:grid; grid-template-columns:360px 1fr}
+    .up-backdrop{grid-column:1/3; grid-row:1; background:rgba(0,0,0,.35)}
+    .up-sheet{grid-column:2; grid-row:1; background:#fff; height:100vh; width:min(520px,100%); margin-left:auto; display:grid; grid-template-rows:auto 1fr auto; box-shadow: -8px 0 24px rgba(0,0,0,.15)}
+    .up-head{display:flex; align-items:center; gap:12px; padding:16px; border-bottom:1px solid var(--border)}
+    .up-title{font-weight:800; letter-spacing:.02em; color:#555}
+    .up-btn{margin-left:auto; padding:10px 14px; border-radius:10px; border:none; background:var(--brand); color:#fff; font-weight:800; cursor:pointer}
+    .up-body{padding:16px; overflow:auto; display:grid; gap:14px}
+    .up-drop{border:2px dashed #cfcfcf; border-radius:14px; padding:16px; text-align:center; color:#666}
+    .up-grid{display:grid; gap:12px; grid-template-columns:repeat(3,1fr)}
+    .tile-u{position:relative; aspect-ratio:1/1; border:1px solid var(--border); border-radius:12px; overflow:hidden; display:grid; place-items:center; background:#fafafa}
+    .tile-u img{width:100%; height:100%; object-fit:cover}
+    .tile-u .check{position:absolute; top:8px; left:8px; background:#fff; border:1px solid var(--border); width:18px; height:18px; border-radius:4px; display:grid; place-items:center; font-size:12px; cursor:pointer}
+    .tile-u .del{position:absolute; top:8px; right:8px; background:#fff; border:1px solid var(--border); width:24px; height:24px; border-radius:8px; display:grid; place-items:center; cursor:pointer}
+    .up-foot{display:flex; align-items:center; gap:10px; padding:12px 16px; border-top:1px solid var(--border); background:#fff}
+    .muted{color:#888; font-size:12px}
+    .ghost-btn{padding:10px 12px; border:1px solid var(--border); border-radius:10px; background:#fff; font-weight:700; cursor:pointer}
+    .danger{background:#ffe8e5; color:#7a1f18}
+
+    @media (max-width:640px){ .up-grid{grid-template-columns:repeat(2,1fr)} }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <!-- TOP BAR -->
+    <div class="topbar">
+      <div class="home-btn" id="home">🏠</div>
+      <nav class="menu"><a href="#">File</a><a href="#">Edit</a><a href="#">Share</a><a href="#">Resize</a></nav>
+<div class="brand">
+  <div class=>
+    <img src="logowhite.png" alt="" style="height:40px; width:auto; vertical-align:middle;">
+  </div>
+   <span style="opacity:.9; font-weight:600"></span>
+</div>
+      <div class="unit">Inches ▾</div>
+    </div>
+
+    <!-- LEFT TOOL RAIL -->
+    <aside class="rail" style="border-top-right-radius:12px;border-bottom-right-radius:24px;overflow:hidden">
+      <div class="tool" title="Move">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v20M2 12h20"/><path d="m8 6 4-4 4 4M8 18l4 4 4-4M6 8 2 12l4 4M18 8l4 4-4 4"/></svg>
+        <span>MOVE</span>
+      </div>
+      <div class="tool" title="Brush">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 4l6 6-9 9H5v-6l9-9z"/><path d="M16 2l6 6"/></svg>
+        <span>BRUSH</span>
+      </div>
+      <div class="tool" id="tool-color" title="Color">
+        <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="12" r="10" fill="#111"/></svg>
+        <span>COLOR</span>
+      </div>
+      <div class="tool" id="tool-layers" title="Layers">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m12 2 9 5-9 5-9-5 9-5z"/><path d="m3 12 9 5 9-5"/><path d="m3 17 9 5 9-5"/></svg>
+        <span>LAYERS</span>
+      </div>
+      <div class="tool" id="tool-gradient" title="Gradient">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="6" width="16" height="12" rx="2"/></svg>
+        <span>GRADIENT</span>
+      </div>
+      <div class="tool" id="tool-shapes" title="Shapes">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><circle cx="17" cy="7" r="4"/><path d="M3 14l8 7H3z"/></svg>
+        <span>SHAPES</span>
+      </div>
+      <div class="tool" title="Templates">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="6"/><rect x="3" y="14" width="8" height="6"/><rect x="13" y="14" width="8" height="6"/></svg>
+        <span>TEMPLATES</span>
+      </div>
+      <div class="tool" id="tool-text" title="Text">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h16M10 18h4M12 6v12"/></svg>
+        <span>TEXT</span>
+      </div>
+      <div class="tool" id="tool-upload" title="Upload">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5-5 5 5"/><path d="M12 15V5"/></svg>
+        <span>UPLOAD</span>
+      </div>
+      <div class="tool" title="Crop">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 2v16a2 2 0 0 0 2 2h16"/><path d="M2 6h16a2 2 0 0 1 2 2v16"/></svg>
+        <span>CROP</span>
+      </div>
+    </aside>
+
+    <!-- STAGE -->
+    <section class="stage">
+      <!-- Floating format bar -->
+      <div class="format-wrap">
+        <div class="format">
+          <div class="dd">Font Name ▾</div>
+          <div class="dd">+ 10 −</div>
+          <button class="btn">Ag</button>
+          <button class="btn"><b>B</b></button>
+          <button class="btn"><i>I</i></button>
+          <button class="btn"><u>U</u></button>
+          <div class="sep"></div>
+          <button class="btn">≡</button>
+          <button class="btn">≣</button>
+          <button class="btn">≡↔</button>
+          <button class="btn">•</button>
+          <button class="btn">—</button>
+          <div class="dd" style="margin-left:auto">▦ ▾</div>
+          <button class="btn">⟲</button>
+          <button class="btn">⟳</button>
+        </div>
+      </div>
+
+      <!-- Canvas -->
+      <div class="canvas">
+        <div class="board">
+          <div class="ruler-h"></div>
+          <div class="ruler-h bottom"></div>
+          <div class="ruler-v"></div>
+          <div class="ruler-v right"></div>
+          <div class="tick"></div>
+          <div class="bleed"></div>
+          <div class="art" id="art"></div>
+
+          <!-- Floating Text Layout card (hidden by default) -->
+          <div class="text-card" id="text-layout">
+            <div class="hd">TEXT LAYOUT</div>
+            <div class="tiles">
+              <div class="tile">POINT<br/>TEXT</div>
+              <div class="tile">AREA<br/>TEXT</div>
+              <div class="tile">PATH</div>
+              <div class="tile">WRAP<br/>TEXT</div>
+            </div>
+            <div class="hd">OTHER</div>
+            <div class="other">
+              <label class="check"><input type="checkbox"> Bring Text Above Objects</label>
+              <label class="check"><input type="checkbox"> Hyphenate</label>
+              <label class="check"><input type="checkbox"> Align to Baseline Grid</label>
+              <label class="check"><input type="checkbox"> Link Text Boxes</label>
+              <label class="check"><input type="checkbox"> Follow same font family</label>
+            </div>
+          </div>
+
+          <!-- Color Panel (hidden by default) -->
+          <div class="color-panel" id="color-panel" role="dialog" aria-modal="true" aria-labelledby="cp-title">
+            <div class="cp-head">
+              <div class="chip" id="active-chip"></div>
+              <div id="cp-title">COLOR</div>
+              <div style="margin-left:auto; display:flex; align-items:center; gap:8px; font-size:12px; color:#666">RGB
+                <label style="position:relative; display:inline-block; width:36px; height:18px">
+                  <input id="mode-toggle" type="checkbox" aria-label="Toggle RGB/CMYK" style="opacity:0;width:0;height:0">
+                  <span style="position:absolute; inset:0; background:#e6e6e6; border-radius:999px;"></span>
+                  <span id="knob" style="position:absolute; top:2px; left:2px; width:14px; height:14px; background:#fff; border:1px solid var(--border); border-radius:50%; transition:.2s"></span>
+                </label>
+              </div>
+            </div>
+            <div class="cp-body">
+              <div class="cp-sec-hd">CMYK - Print Mode</div>
+              <div class="grad" id="grad"></div>
+              <div class="slider"><label for="c">Cyan</label><input id="c" type="range" min="0" max="100" value="30"><div class="pct" id="cPct">30%</div></div>
+              <div class="slider"><label for="m">Magenta</label><input id="m" type="range" min="0" max="100" value="30"><div class="pct" id="mPct">30%</div></div>
+              <div class="slider"><label for="y">Yellow</label><input id="y" type="range" min="0" max="100" value="30"><div class="pct" id="yPct">30%</div></div>
+              <div class="slider"><label for="k">Black</label><input id="k" type="range" min="0" max="100" value="30"><div class="pct" id="kPct">30%</div></div>
+
+              <div class="cp-sec-hd">Project Colors</div>
+              <div class="swatch-grid" id="project-swatches"></div>
+
+              <div class="cp-sec-hd">Standard Print Colors</div>
+              <div class="swatch-grid" id="std-swatches"></div>
+            </div>
+          </div>
+
+          <!-- Gradient Panel (hidden by default) -->
+          <div class="gradient-panel" id="gradient-panel" role="dialog" aria-modal="true" aria-labelledby="gp-title">
+            <div class="gp-head" id="gp-title">GRADIENTS</div>
+            <div class="gp-body">
+              <!-- Types -->
+              <div class="g-row">
+                <div class="g-types" id="g-types">
+                  <button class="g-type" data-type="linear" data-active="true" title="Linear">
+                    <div style="width:100%;height:100%;background:linear-gradient(135deg,#95a2ff,#eef1ff)"></div>
+                  </button>
+                  <button class="g-type" data-type="radial" title="Radial">
+                    <div style="width:100%;height:100%;background:radial-gradient(circle at 40% 40%,#95a2ff,#eef1ff)"></div>
+                  </button>
+                  <button class="g-type" data-type="conic" title="Conic">
+                    <div style="width:100%;height:100%;background:conic-gradient(from 0deg,#95a2ff,#eef1ff)"></div>
+                  </button>
+                  <button class="g-type" data-type="diamond" title="Diamond (sim)">
+                    <div style="width:100%;height:100%;background:radial-gradient(closest-side,#95a2ff 0%, #eef1ff 70%) transform:rotate(45deg)"></div>
+                  </button>
+                  <button class="g-type" data-type="reflected" title="Reflected (sim)">
+                    <div style="width:100%;height:100%;background:linear-gradient(90deg,#95a2ff 0%, #eef1ff 50%, #95a2ff 100%)"></div>
+                  </button>
+                  <button class="g-type" data-type="multi" title="Multi-Point">
+                    <div style="width:100%;height:100%;background:radial-gradient(circle at 25% 35%,#95a2ff,transparent 50%), radial-gradient(circle at 70% 70%,#c9d0ff, #eef1ff 60%)"></div>
+                  </button>
+                </div>
+              </div>
+
+              <!-- Gradient Bar (position / midpoint) -->
+              <div class="g-row">
+                <div style="font-weight:800;color:#666">Gradient Bar</div>
+                <div class="bar" id="bar">
+                  <div class="knob" id="midKnob" style="left:50%"></div>
+                </div>
+              </div>
+
+              <!-- Color pickers -->
+              <div class="g-row">
+                <div style="font-weight:800;color:#666">Color Picker</div>
+                <div class="cols">
+                  <div class="cell">
+                    <input type="color" id="col1" value="#6e72ff" aria-label="Start color" />
+                  </div>
+                  <div class="cell">
+                    <input type="color" id="col2" value="#eef1ff" aria-label="End color" />
+                  </div>
+                  <button class="ghost" id="addStop" title="Add stop" disabled>＋</button>
+                </div>
+              </div>
+
+              <!-- Angle & Opacity -->
+              <div class="g-row">
+                <div class="row-flex"><label for="angle">Angle</label><input id="angle" type="range" min="0" max="360" value="45"><div id="angleVal" style="width:44px;text-align:right;color:#666">45°</div></div>
+                <div class="row-flex"><label for="opacity">Opacity</label><input id="opacity" type="range" min="0" max="100" value="100"><div id="opVal" style="width:44px;text-align:right;color:#666">100%</div></div>
+              </div>
+
+              <!-- Footer -->
+              <div class="row-flex" style="justify-content:space-between">
+                <label class="toggle"><input type="checkbox" id="live" checked> Preview Live</label>
+                <button class="apply" id="applyBtn">Apply</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- SHAPES PANEL (hidden by default) -->
+          <div class="shapes-panel" id="shapes-panel" role="dialog" aria-modal="true" aria-labelledby="sp-title">
+            <div class="sp-head" id="sp-title">SHAPES</div>
+            <div class="sp-body" id="sp-body">
+              <div class="shape-row" data-shape="line">
+                <div class="shape-icon"><svg width="26" height="26" viewBox="0 0 26 26"><line x1="4" y1="22" x2="22" y2="4" stroke="#111" stroke-width="2"/></svg></div>
+                <div class="shape-name">Line Tool</div>
+              </div>
+              <div class="shape-row" data-shape="square">
+                <div class="shape-icon"><svg width="26" height="26" viewBox="0 0 26 26"><rect x="5" y="5" width="16" height="16" fill="#111"/></svg></div>
+                <div class="shape-name">Square Tool</div>
+              </div>
+              <div class="shape-row" data-shape="rectangle">
+                <div class="shape-icon"><svg width="26" height="26" viewBox="0 0 26 26"><rect x="4" y="8" width="18" height="12" fill="#111"/></svg></div>
+                <div class="shape-name">Rectangle Tool</div>
+              </div>
+              <div class="shape-row" data-shape="circle">
+                <div class="shape-icon"><svg width="26" height="26" viewBox="0 0 26 26"><circle cx="13" cy="13" r="9" fill="#111"/></svg></div>
+                <div class="shape-name">Circle Tool</div>
+              </div>
+              <div class="shape-row" data-shape="polygon">
+                <div class="shape-icon"><svg width="26" height="26" viewBox="0 0 26 26"><polygon points="13,4 22,10 19,22 7,22 4,10" fill="#111"/></svg></div>
+                <div class="shape-name">Polygon Tool</div>
+              </div>
+              <div class="shape-row" data-shape="arrow">
+                <div class="shape-icon"><svg width="26" height="26" viewBox="0 0 26 26"><line x1="4" y1="13" x2="20" y2="13" stroke="#111" stroke-width="2"/><polyline points="16,9 20,13 16,17" fill="none" stroke="#111" stroke-width="2"/></svg></div>
+                <div class="shape-name">Arrow Tool</div>
+              </div>
+              <div class="shape-row" data-shape="star">
+                <div class="shape-icon"><svg width="26" height="26" viewBox="0 0 26 26"><polygon points="13,3 16,10 24,10 18,14 20,22 13,17 6,22 8,14 2,10 10,10" fill="#111"/></svg></div>
+                <div class="shape-name">Custom Shape</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- LAYERS PANEL (hidden by default) -->
+          <div class="layers-panel" id="layers-panel" role="dialog" aria-modal="true" aria-labelledby="lp-title">
+            <div class="layers-head"><div id="lp-title">LAYERS</div><div style="margin-left:auto; font-size:12px;color:#888">Drag to reorder</div></div>
+            <div class="layers-body" id="layers-body"><div class="empty-note">No layers yet. Add shapes or images.</div></div>
+          </div>
+
+        </div>
+      </div>
+
+      <!-- Bottom mini toolbar -->
+      <div class="mini">
+        <div class="bar">
+          <div class="sw b"></div>
+          <div class="sw w"></div>
+          <div class="dd">+ 10 −</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- RIGHT PREVIEW -->
+    <aside class="right">
+      <div class="head">PREVIEW</div>
+      <div class="preview">
+        <div class="mock"></div>
+        <div class="row">
+          <button class="ghost">FRONT SIDE</button>
+          <button class="ghost">BACK SIDE</button>
+        </div>
+        <div class="dots"></div>
+      </div>
+    </aside>
+  </div>
+
+  <!-- ============== Uploads Panel Markup ============== -->
+  <div class="uploads-panel" id="uploads">
+    <div class="up-backdrop" id="up-backdrop"></div>
+    <aside class="up-sheet" role="dialog" aria-modal="true" aria-labelledby="up-title">
+      <header class="up-head">
+        <div class="up-title" id="up-title">Uploads</div>
+        <button class="up-btn" id="btn-upload">UPLOAD NEW FILE</button>
+        <input type="file" id="file-input" accept="image/*" multiple style="display:none" />
+      </header>
+      <div class="up-body">
+        <div class="up-drop" id="dropzone">Drag & drop images here, or click the button above.</div>
+        <div class="up-grid" id="up-grid"><!-- tiles injected here --></div>
+      </div>
+      <footer class="up-foot">
+        <button class="ghost-btn danger" id="bulk-delete" disabled>Delete Selected</button>
+        <span class="muted" id="count-label">0 selected</span>
+        <button class="ghost-btn" id="close-up" style="margin-left:auto">Close</button>
+      </footer>
+    </aside>
+  </div>
+
+  <script>
+    // ---------- PANEL TOGGLES ----------
+    const textTool = document.getElementById('tool-text');
+    const textPanel = document.getElementById('text-layout');
+    const colorTool = document.getElementById('tool-color');
+    const colorPanel = document.getElementById('color-panel');
+    const gradientTool = document.getElementById('tool-gradient');
+    const gradientPanel = document.getElementById('gradient-panel');
+    const shapesTool = document.getElementById('tool-shapes');
+    const shapesPanel = document.getElementById('shapes-panel');
+    const layersTool = document.getElementById('tool-layers');
+    const layersPanel = document.getElementById('layers-panel');
+
+    function closeText(){ textPanel.classList.remove('show'); }
+    function toggleText(){ textPanel.classList.toggle('show'); hideExcept(textPanel); }
+    textTool?.addEventListener('click', (e)=>{ e.stopPropagation(); toggleText(); });
+
+    function toggleColor(){ colorPanel.classList.toggle('show'); hideExcept(colorPanel); }
+    function closeColor(){ colorPanel.classList.remove('show'); }
+    colorTool?.addEventListener('click', (e)=>{ e.stopPropagation(); toggleColor(); });
+
+    function toggleGradient(){ gradientPanel.classList.toggle('show'); hideExcept(gradientPanel); }
+    function closeGradient(){ gradientPanel.classList.remove('show'); }
+    gradientTool?.addEventListener('click', (e)=>{ e.stopPropagation(); toggleGradient(); });
+
+    function toggleShapes(){ shapesPanel.classList.toggle('show'); hideExcept(shapesPanel); }
+    function closeShapes(){ shapesPanel.classList.remove('show'); }
+    shapesTool?.addEventListener('click', (e)=>{ e.stopPropagation(); toggleShapes(); });
+
+    function toggleLayers(){ layersPanel.classList.toggle('show'); hideExcept(layersPanel); }
+    function closeLayers(){ layersPanel.classList.remove('show'); }
+    layersTool?.addEventListener('click', (e)=>{ e.stopPropagation(); toggleLayers(); });
+
+    function hideExcept(panel){
+      [textPanel,colorPanel,gradientPanel,shapesPanel,layersPanel].forEach(p=>{ if(p!==panel) p.classList.remove('show'); });
+    }
+
+    // Close panels on outside click
+    document.addEventListener('click', (e)=>{
+      const inside = (el, btn)=> el.contains(e.target) || (btn && btn.contains(e.target));
+      if(!inside(colorPanel, colorTool)) closeColor();
+      if(!inside(textPanel, textTool)) closeText();
+      if(!inside(gradientPanel, gradientTool)) closeGradient();
+      if(!inside(shapesPanel, shapesTool)) closeShapes();
+      if(!inside(layersPanel, layersTool)) closeLayers();
+      if(!inside(uploads, document.getElementById('tool-upload'))) closeUploads();
+    });
+
+    // ESC closes any open panel
+    document.addEventListener('keydown', (e)=>{ if(e.key==='Escape'){ closeColor(); closeText(); closeGradient(); closeShapes(); closeLayers(); closeUploads(); }});
+
+    // ---------- COLOR LOGIC ----------
+    const c = document.getElementById('c');
+    const m = document.getElementById('m');
+    const y = document.getElementById('y');
+    const k = document.getElementById('k');
+
+    const cpcts = { c: document.getElementById('cPct'), m: document.getElementById('mPct'), y: document.getElementById('yPct'), k: document.getElementById('kPct') };
+    const art = document.getElementById('art');
+    const activeChip = document.getElementById('active-chip');
+
+    function cmykToRgb(c, m, y, k){
+      const C = c/100, M = m/100, Y = y/100, K = k/100;
+      const r = Math.round(255 * (1 - C) * (1 - K));
+      const g = Math.round(255 * (1 - M) * (1 - K));
+      const b = Math.round(255 * (1 - Y) * (1 - K));
+      return {r,g,b};
+    }
+    function rgbToHex(r,g,b){ return '#' + [r,g,b].map(v=> v.toString(16).padStart(2,'0')).join(''); }
+
+    function updateFromSliders(){
+      cpcts.c.textContent = c.value + '%';
+      cpcts.m.textContent = m.value + '%';
+      cpcts.y.textContent = y.value + '%';
+      cpcts.k.textContent = k.value + '%';
+      const rgb = cmykToRgb(+c.value, +m.value, +y.value, +k.value);
+      const hex = rgbToHex(rgb.r, rgb.g, rgb.b);
+      art.style.background = hex;            // preview on artboard
+      activeChip.style.background = hex;     // chip
+    }
+    [c,m,y,k].forEach(sl=> sl.addEventListener('input', updateFromSliders));
+
+    // Populate swatches
+    const projectColors = ['#1f2937','#2b364b','#d34231','#2a4b86','#3a6f2f','#4a86ff'];
+    const stdColors = ['#111111','#4ba3e3','#5b59ff','#6a3df0','#e64b7f','#60c659','#f38a2a','#f4cd29'];
+    function makeSwatches(list, el){
+      list.forEach(hex=>{
+        const d = document.createElement('button');
+        d.className = 'swatch';
+        d.style.background = hex;
+        d.title = hex;
+        d.addEventListener('click', ()=>{ art.style.background = hex; activeChip.style.background = hex; });
+        el.appendChild(d);
+      });
+    }
+    makeSwatches(projectColors, document.getElementById('project-swatches'));
+    makeSwatches(stdColors, document.getElementById('std-swatches'));
+
+    // Mode toggle visual (dummy switch)
+    const modeToggle = document.getElementById('mode-toggle');
+    const knob = document.getElementById('knob');
+    modeToggle.addEventListener('change', ()=>{ knob.style.left = modeToggle.checked ? '20px' : '2px'; });
+
+    // Initialize plain color state
+    updateFromSliders();
+
+    // ---------- GRADIENT LOGIC ----------
+    const gTypes = document.getElementById('g-types');
+    const midKnob = document.getElementById('midKnob');
+    const bar = document.getElementById('bar');
+    const col1 = document.getElementById('col1');
+    const col2 = document.getElementById('col2');
+    const angle = document.getElementById('angle');
+    const angleVal = document.getElementById('angleVal');
+    const opacity = document.getElementById('opacity');
+    const opVal = document.getElementById('opVal');
+    const live = document.getElementById('live');
+    const applyBtn = document.getElementById('applyBtn');
+
+    let gState = { type: 'linear', mid: 50, c1: '#6e72ff', c2: '#eef1ff', angle: 45, opacity: 100 };
+
+    function setActiveType(btn){
+      [...gTypes.children].forEach(b=> b.dataset.active='false');
+      btn.dataset.active='true';
+      gState.type = btn.dataset.type;
+      renderBar();
+      maybePreview();
+    }
+
+    gTypes.addEventListener('click', (e)=>{
+      const btn = e.target.closest('.g-type');
+      if(!btn) return; setActiveType(btn);
+    });
+
+    function hexToRgba(hex, alpha){
+      const v = hex.replace('#','');
+      const bigint = parseInt(v,16);
+      const r = (v.length===3) ? parseInt(v[0]+v[0],16) : (bigint >> 16) & 255;
+      const g = (v.length===3) ? parseInt(v[1]+v[1],16) : (bigint >> 8) & 255;
+      const b = (v.length===3) ? parseInt(v[2]+v[2],16) : bigint & 255;
+      return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+    }
+
+    function gradientCSS(){
+      const a = gState.angle;
+      const mid = gState.mid;
+      const a1 = gState.opacity/100;
+      const c1 = hexToRgba(gState.c1,a1);
+      const c2 = hexToRgba(gState.c2,a1);
+
+      if(gState.type === 'linear') return `linear-gradient(${a}deg, ${c1} 0%, ${c2} ${mid}%)`;
+      if(gState.type === 'radial') return `radial-gradient(circle at 50% 50%, ${c1} 0%, ${c2} ${mid}%)`;
+      if(gState.type === 'conic') return `conic-gradient(from ${a}deg at 50% 50%, ${c1} 0deg, ${c2} 360deg)`;
+      if(gState.type === 'reflected') return `linear-gradient(${a}deg, ${c1} 0%, ${c2} ${mid}%, ${c1} 100%)`;
+      if(gState.type === 'multi') return `radial-gradient(circle at 30% 35%, ${c1}, transparent 60%), radial-gradient(circle at 70% 70%, ${c2}, ${c1})`;
+      return `radial-gradient(closest-side, ${c1} 0%, ${c2} 70%)`; // diamond simulated
+    }
+
+    function renderBar(){ bar.style.background = `linear-gradient(90deg, ${gState.c1}, ${gState.c2})`; midKnob.style.left = `${gState.mid}%`; }
+    function applyToArt(){ art.style.background = gradientCSS(); }
+    function maybePreview(){ if(live.checked){ applyToArt(); } }
+
+    // Mid knob drag
+    (()=>{
+      let dragging=false;
+      function setMidByClientX(x){
+        const rect = bar.getBoundingClientRect();
+        let pct = ((x - rect.left) / rect.width) * 100;
+        pct = Math.min(100, Math.max(0, pct));
+        gState.mid = Math.round(pct);
+        renderBar(); maybePreview();
+      }
+      midKnob.addEventListener('mousedown', ()=> dragging=true);
+      document.addEventListener('mouseup', ()=> dragging=false);
+      document.addEventListener('mousemove', (e)=>{ if(dragging) setMidByClientX(e.clientX); });
+      bar.addEventListener('click', (e)=> setMidByClientX(e.clientX));
+    })();
+
+    // Inputs
+    col1.addEventListener('input', (e)=>{ gState.c1 = e.target.value; renderBar(); maybePreview(); });
+    col2.addEventListener('input', (e)=>{ gState.c2 = e.target.value; renderBar(); maybePreview(); });
+    angle.addEventListener('input', (e)=>{ gState.angle = +e.target.value; angleVal.textContent = `${gState.angle}°`; maybePreview(); });
+    opacity.addEventListener('input', (e)=>{ gState.opacity = +e.target.value; opVal.textContent = `${gState.opacity}%`; maybePreview(); });
+    live.addEventListener('change', ()=>{ /* just toggles preview mode */ });
+    applyBtn.addEventListener('click', applyToArt);
+
+    // Start state
+    renderBar();
+    maybePreview();
+
+    // ---------- SHAPE CREATION & DRAG ----------
+    const spBody = document.getElementById('sp-body');
+    spBody.addEventListener('click', (e)=>{
+      const row = e.target.closest('.shape-row');
+      if(!row) return;
+      const type = row.getAttribute('data-shape');
+      addShape(type);
+    });
+
+    function centerInArt(width, height){
+      const rect = art.getBoundingClientRect();
+      return { left: (rect.width - width)/2, top: (rect.height - height)/2 };
+    }
+
+    let layerCounter = 1;
+    const layers = []; // {id, el, name, visible}
+
+    function addShape(type){
+      const el = document.createElement('div');
+      el.classList.add('shape');
+      el.dataset.layerId = crypto.randomUUID();
+      let w=120, h=120, name = '';
+
+      switch(type){
+        case 'line': w = 160; h = 2; el.classList.add('line'); el.style.transform = 'rotate(-45deg)'; name='Line'; break;
+        case 'square': w = 140; h = 140; name='Square'; break;
+        case 'rectangle': w = 200; h = 120; name='Rectangle'; break;
+        case 'circle': w = 140; h = 140; el.classList.add('circle'); name='Circle'; break;
+        case 'polygon': w = 160; h = 160; el.classList.add('polygon'); name='Polygon'; break;
+        case 'arrow': w = 200; h = 6; el.classList.add('line','arrow'); el.style.transform = 'none'; name='Arrow'; break;
+        case 'star': w = 160; h = 160; el.style.clipPath = 'polygon(50% 0%, 61% 35%, 98% 35%, 68% 57%, 79% 91%, 50% 70%, 21% 91%, 32% 57%, 2% 35%, 39% 35%)'; name='Star'; break;
+      }
+
+      const pos = centerInArt(w,h);
+      el.style.width = w + 'px';
+      el.style.height = h + 'px';
+      el.style.left = pos.left + 'px';
+      el.style.top = pos.top + 'px';
+      el.style.position = 'absolute';
+
+      makeDraggable(el);
+      makeSelectable(el);
+      art.appendChild(el);
+      registerLayer(el, `${name} ${layerCounter++}`);
+      closeShapes();
+    }
+
+    function makeDraggable(el){
+      let dragging=false, startX=0, startY=0, startLeft=0, startTop=0;
+      el.addEventListener('mousedown', (e)=>{
+        dragging=true; startX=e.clientX; startY=e.clientY; selectEl(el);
+        const r=el.getBoundingClientRect(); const parent=art.getBoundingClientRect(); startLeft=r.left-parent.left; startTop=r.top-parent.top; e.preventDefault();
+      });
+      document.addEventListener('mousemove', (e)=>{
+        if(!dragging) return; const dx=e.clientX-startX, dy=e.clientY-startY;
+        el.style.left = Math.max(0, Math.min(art.clientWidth - el.offsetWidth, startLeft + dx)) + 'px';
+        el.style.top = Math.max(0, Math.min(art.clientHeight - el.offsetHeight, startTop + dy)) + 'px';
+      });
+      document.addEventListener('mouseup', ()=> dragging=false);
+    }
+
+    // ---------- LAYERS ----------
+    const layersBody = document.getElementById('layers-body');
+    let selectedId = null;
+
+    function registerLayer(el, name){
+      const id = el.dataset.layerId || crypto.randomUUID();
+      el.dataset.layerId = id;
+      layers.unshift({ id, el, name, visible:true }); // newest on top/front
+      refreshStacking();
+      renderLayers();
+    }
+
+    function renderLayers(){
+      layersBody.innerHTML = '';
+      if(layers.length===0){ layersBody.innerHTML = '<div class="empty-note">No layers yet. Add shapes or images.</div>'; return; }
+
+      layers.forEach((l, idx)=>{
+        const row = document.createElement('div');
+        row.className='layer-row';
+        row.draggable = true;
+        row.dataset.id = l.id;
+        row.dataset.selected = (l.id===selectedId);
+        row.innerHTML = `
+          <div class="layer-handle" title="Drag"></div>
+          <div class="layer-name">${l.name}</div>
+          <button class="layer-btn vis" title="Toggle visibility">${l.visible?'👁️':'🚫'}</button>
+          <button class="layer-btn del" title="Delete">🗑️</button>
+        `;
+        // select on click name
+        row.querySelector('.layer-name').addEventListener('click', ()=>{ selectEl(l.el); });
+        // toggle visibility
+        row.querySelector('.vis').addEventListener('click', ()=>{ l.visible = !l.visible; l.el.style.display = l.visible?'':'none'; renderLayers(); });
+        // delete
+        row.querySelector('.del').addEventListener('click', ()=>{ l.el.remove(); const i=layers.findIndex(x=>x.id===l.id); if(i>-1) layers.splice(i,1); if(selectedId===l.id) selectedId=null; renderLayers(); });
+
+        // dnd reorder
+        row.addEventListener('dragstart', (e)=>{ e.dataTransfer.setData('text/plain', l.id); });
+        row.addEventListener('dragover', (e)=>{ e.preventDefault(); });
+        row.addEventListener('drop', (e)=>{
+          e.preventDefault();
+          const srcId = e.dataTransfer.getData('text/plain');
+          const srcIdx = layers.findIndex(x=>x.id===srcId);
+          const dstIdx = layers.findIndex(x=>x.id===l.id);
+          if(srcIdx<0 || dstIdx<0 || srcIdx===dstIdx) return;
+          const [moved] = layers.splice(srcIdx,1);
+          layers.splice(dstIdx,0,moved);
+          refreshStacking();
+          renderLayers();
+        });
+
+        layersBody.appendChild(row);
+      });
+    }
+
+    function refreshStacking(){
+      // top of layers array is front; set z-index accordingly and reorder DOM for accessibility
+      const baseZ = 10;
+      layers.forEach((l, i)=>{ l.el.style.zIndex = baseZ + (layers.length - i); });
+      // Re-append in order so keyboard traversal matches panel
+      layers.slice().reverse().forEach(l=> art.appendChild(l.el));
+    }
+
+    function selectEl(el){
+      selectedId = el.dataset.layerId;
+      // visual ring
+      art.querySelectorAll('.selected-ring').forEach(n=> n.classList.remove('selected-ring'));
+      el.classList.add('selected-ring');
+      renderLayers();
+    }
+
+    function makeSelectable(el){ el.addEventListener('click', ()=> selectEl(el)); }
+
+    // ---------- UPLOADS PANEL LOGIC ----------
+    const uploadTool = document.getElementById('tool-upload');
+    const uploads = document.getElementById('uploads');
+    const upBackdrop = document.getElementById('up-backdrop');
+    const btnUpload = document.getElementById('btn-upload');
+    const fileInput = document.getElementById('file-input');
+    const dropzone = document.getElementById('dropzone');
+    const upGrid = document.getElementById('up-grid');
+    const closeUpBtn = document.getElementById('close-up');
+    const bulkDelete = document.getElementById('bulk-delete');
+    const countLabel = document.getElementById('count-label');
+
+    function openUploads(){ uploads.classList.add('show'); }
+    function closeUploads(){ uploads.classList.remove('show'); clearSelection(); }
+    uploadTool?.addEventListener('click', (e)=>{ e.stopPropagation(); openUploads(); hideExcept(null); });
+    upBackdrop.addEventListener('click', closeUploads);
+    closeUpBtn.addEventListener('click', closeUploads);
+
+    btnUpload.addEventListener('click', ()=> fileInput.click());
+    fileInput.addEventListener('change', (e)=> handleFiles(e.target.files));
+
+    // drag & drop
+    ;['dragenter','dragover'].forEach(ev=> dropzone.addEventListener(ev, (e)=>{ e.preventDefault(); dropzone.style.background='#f8f8ff'; }));
+    ;['dragleave','drop'].forEach(ev=> dropzone.addEventListener(ev, (e)=>{ e.preventDefault(); dropzone.style.background=''; }));
+    dropzone.addEventListener('drop', (e)=>{ handleFiles(e.dataTransfer.files); });
+
+    // Persist to localStorage for demo
+    const LS_KEY = 'cc_uploads_v1';
+    function saveUploads(data){ localStorage.setItem(LS_KEY, JSON.stringify(data)); }
+    function loadUploads(){ try { return JSON.parse(localStorage.getItem(LS_KEY) || '[]'); } catch { return []; } }
+
+    let filesState = loadUploads();
+
+    function handleFiles(fileList){
+      const toRead = [...fileList].filter(f=> f.type.startsWith('image/'));
+      if(!toRead.length) return;
+      let remaining = toRead.length;
+      toRead.forEach(f=>{
+        const reader = new FileReader();
+        reader.onload = () => {
+          filesState.unshift({ id: crypto.randomUUID(), name: f.name, dataUrl: reader.result });
+          remaining--; if(remaining===0){ saveUploads(filesState); renderGrid(); }
+        };
+        reader.readAsDataURL(f);
+      });
+      fileInput.value = '';
+    }
+
+    function renderGrid(){
+      upGrid.innerHTML = '';
+      if(filesState.length===0){
+        upGrid.innerHTML = '<div class="muted" style="grid-column:1/-1;text-align:center;padding:12px">No files yet. Upload to see thumbnails.</div>';
+        return;
+      }
+      filesState.forEach(file=>{
+        const tile = document.createElement('div');
+        tile.className = 'tile-u';
+        tile.dataset.id = file.id;
+        tile.innerHTML = `
+          <span class="check" role="checkbox" aria-checked="false">✓</span>
+          <span class="del" title="Delete">🗑️</span>
+          <img src="${file.dataUrl}" alt="${file.name}">
+        `;
+        // double-click to place image on artboard as placed image
+        tile.querySelector('img').addEventListener('dblclick', ()=> placeImageOnArt(file));
+        // select toggle
+        tile.querySelector('.check').addEventListener('click', (e)=>{ e.stopPropagation(); toggleSelect(tile); });
+        // delete single
+        tile.querySelector('.del').addEventListener('click', (e)=>{ e.stopPropagation(); deleteById(file.id); });
+        upGrid.appendChild(tile);
+      });
+      clearSelection();
+    }
+
+    function placeImageOnArt(file){
+      const img = document.createElement('img');
+      img.src = file.dataUrl; img.alt = file.name;
+      img.style.position='absolute'; img.style.left='20px'; img.style.top='20px'; img.style.maxWidth='60%'; img.style.maxHeight='60%';
+      img.style.borderRadius='6px'; img.style.boxShadow='0 4px 16px rgba(0,0,0,.15)';
+      img.dataset.layerId = crypto.randomUUID();
+      makeDraggable(img);
+      makeSelectable(img);
+      art.appendChild(img);
+      registerLayer(img, `Image ${layerCounter++}`);
+      closeUploads();
+    }
+
+    // selection + bulk actions (Uploads)
+    function selectedIds(){ return [...upGrid.querySelectorAll('.tile-u[data-selected="true"]')].map(t=> t.dataset.id); }
+    function clearSelection(){ upGrid.querySelectorAll('.tile-u').forEach(t=>{ t.dataset.selected='false'; const c=t.querySelector('.check'); if(c) c.style.background='#fff'; }); updateSelectionUI(); }
+    function toggleSelect(tile){
+      const sel = tile.dataset.selected === 'true';
+      tile.dataset.selected = (!sel).toString();
+      tile.querySelector('.check').style.background = !sel ? '#dbeafe' : '#fff';
+      updateSelectionUI();
+    }
+    function updateSelectionUI(){ const n = selectedIds().length; countLabel.textContent = n + ' selected'; bulkDelete.disabled = n===0; }
+    bulkDelete.addEventListener('click', ()=>{ const ids = selectedIds(); if(!ids.length) return; filesState = filesState.filter(f=> !ids.includes(f.id)); saveUploads(filesState); renderGrid(); });
+    function deleteById(id){ filesState = filesState.filter(f=> f.id!==id); saveUploads(filesState); renderGrid(); }
+
+    // init
+    renderGrid();
+  </script>
+  
+</body>
+</html>
