@@ -3,17 +3,9 @@
 /*
  * CanvasStage
  *
- * This component provides a fully functional drawing surface based on
- * Fabric.js.  It supports panning and zooming via the CanvasEngine
- * wrapper, freehand drawing with the brush tool, inserting various
- * shapes and text, uploading images directly to the canvas and
- * cropping the document.  Colours and gradients can be applied to
- * selected objects and are propagated to new objects.  A ref
- * interface exposes imperative methods so the parent page can
- * interact with the stage without prop drilling.  The interface
- * includes methods for updating the fill colour, applying gradient
- * fills, inserting templates, adding images and finalising a crop
- * operation.
+ * Fully functional Fabric.js drawing surface hooked to CanvasEngine.
+ * Supports: pan/zoom, brush, shapes, text (point/area), uploads (click/drag),
+ * gradients, crop, templates, and an imperative API used by the editor.
  */
 
 import React, {
@@ -25,12 +17,59 @@ import React, {
 import * as fabric from "fabric";
 import { CanvasEngine } from "../../fabric/CanvasEngine";
 
-// Describes the props accepted by the CanvasStage.  The selected tool
-// determines the behaviour of pointer interactions.  The current
-// colour and gradient are used when drawing new objects or updating
-// existing selections.  The gradient object is optional; when
-// provided and the user triggers a gradient application it will be
-// applied via the ref method.
+/** Max dimension for initial image scale-down */
+const MAX_IMG_SIDE = 600;
+
+/** Load a DOM <img> reliably (handles CORS + blob/data URLs) */
+function loadHTMLImage(src: string): Promise<HTMLImageElement> {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    // crossOrigin only helps for remote http(s) resources; blob/data ignore it.
+    if (/^https?:/i.test(src)) img.crossOrigin = "anonymous";
+    img.onload = () => resolve(img);
+    img.onerror = () => reject(new Error(`Failed to load image: ${src}`));
+    img.src = src;
+  });
+}
+
+/** Create a Fabric image from any URL; supports Fabric v5/v6 */
+async function loadFabricImage(src: string): Promise<fabric.Image> {
+  const anyFabric: any = fabric as any;
+  const FabricImage = anyFabric.Image;
+
+  // Prefer Fabric v6 promise API if available
+  if (FabricImage?.fromURL) {
+    try {
+      const maybe = FabricImage.fromURL(src, { crossOrigin: "anonymous" });
+      // v6 returns a Promise; v5 used a callback
+      if (maybe && typeof maybe.then === "function") {
+        return (await maybe) as fabric.Image;
+      }
+      // Fallback: v5 callback form
+      return await new Promise<fabric.Image>((resolve, reject) => {
+        FabricImage.fromURL(
+          src,
+          (img: fabric.Image | null) =>
+            img ? resolve(img) : reject(new Error("Image load failed")),
+          { crossOrigin: "anonymous" }
+        );
+      });
+    } catch {
+      /* fall through to manual path */
+    }
+  }
+
+  // Last resort: build from a loaded HTMLImageElement
+  const el = await loadHTMLImage(src);
+  return new FabricImage(el, {});
+}
+
+/** Create a blob URL for a File and a revoker for cleanup */
+function fileToObjectURL(file: File) {
+  const url = URL.createObjectURL(file);
+  return { url, revoke: () => URL.revokeObjectURL(url) };
+}
+
 export interface CanvasStageProps {
   selectedTool?: string;
   currentColor?: string;
@@ -41,24 +80,29 @@ export interface CanvasStageProps {
     mid?: number;
     angle?: number;
     opacity?: number;
+    origin?: { x: number; y: number };
+    aspectRatio?: number;
+    reverse?: boolean;
+    applyTo?: "fill" | "stroke" | "both";
   } | null;
+  /** Notify parent so UI reflects text selection style */
+  onTextSelectionChange?: (
+    style: {
+      fontFamily?: string;
+      fontSize?: number;
+      fontWeight?: string | number;
+      fontStyle?: string;
+      underline?: boolean;
+      textAlign?: string;
+    } | null
+  ) => void;
+  /** Force text tool behaviour */
+  textMode?: "point" | "area";
 }
 
-// Methods exposed on the CanvasStage via a ref.  Consumers can use
-// these functions to manipulate the canvas directly.
+/** Imperative API exposed to the editor page */
 export interface CanvasStageRef {
-  /**
-   * Set the active fill colour.  Updates the brush colour and
-   * immediately applies the colour to all selected objects.  Future
-   * shapes and strokes will use this colour.
-   */
   setFillColor: (hex: string) => void;
-  /**
-   * Apply a gradient fill to all currently selected objects.  The
-   * gradient definition supports several types and includes start/end
-   * colours and an angle.  Unknown types will fall back to a simple
-   * linear gradient.
-   */
   applyGradient: (options: {
     type: string;
     c1: string;
@@ -66,39 +110,45 @@ export interface CanvasStageRef {
     mid?: number;
     angle?: number;
     opacity?: number;
+    origin?: { x: number; y: number };
+    aspectRatio?: number;
+    reverse?: boolean;
+    applyTo?: "fill" | "stroke" | "both";
   }) => void;
-  /**
-   * Insert a template onto the canvas.  Templates are predefined
-   * arrangements of objects demonstrating how multiple shapes and
-   * text can be composed.  The implementation includes a few basic
-   * examples.
-   */
   insertTemplate: (id: string) => void;
-  /**
-   * Insert one or more images onto the canvas.  The argument can
-   * either be a list of File objects (from a file input) or a list
-   * of data URLs.  Each image will be added at a default position
-   * near the top left of the canvas.
-   */
-  addImages: (files: File[] | string[]) => void;
-  /**
-   * Finalise a cropping operation.  If the user has drawn a crop
-   * rectangle the canvas contents will be exported to an image and
-   * replaced by the cropped artwork.  If no crop is in progress
-   * this is a no‑op.
-   */
+  /** Insert images (Files, URLs, or HTMLImageElements) near top-left */
+  addImages: (items: Array<File | string | HTMLImageElement>) => void;
+  /** Insert images centered around a specific (x, y) drop point */
+  addImagesAt: (
+    x: number,
+    y: number,
+    items: Array<File | string | HTMLImageElement>
+  ) => void;
   finalizeCrop: () => void;
-  /** Return the underlying Fabric canvas for advanced interactions. */
   getCanvas: () => fabric.Canvas | null;
+  applyTextStyle: (style: {
+    fontFamily?: string;
+    fontSize?: number;
+    fontWeight?: string | number;
+    fontStyle?: string;
+    underline?: boolean;
+    textAlign?: string;
+  }) => void;
+  applyTextLayout: (mode: "point" | "area" | "path" | "wrap") => void;
 }
 
-/**
- * The CanvasStage component.  Accepts a selected tool and optional
- * colour/gradient definitions and exposes an imperative API via a ref.
- */
 const CanvasStage = forwardRef<CanvasStageRef, CanvasStageProps>(
-  function CanvasStageInner({ selectedTool, currentColor, currentGradient }, ref) {
-    // References to DOM elements used by the CanvasEngine
+  function CanvasStageInner(
+    {
+      selectedTool,
+      currentColor,
+      currentGradient,
+      onTextSelectionChange,
+      textMode,
+    },
+    ref
+  ) {
+    // DOM refs used by CanvasEngine
     const wrapRef = useRef<HTMLDivElement | null>(null);
     const canvasRef = useRef<HTMLCanvasElement | null>(null);
     const topRulerRef = useRef<HTMLCanvasElement | null>(null);
@@ -107,25 +157,30 @@ const CanvasStage = forwardRef<CanvasStageRef, CanvasStageProps>(
     const bottomRulerRef = useRef<HTMLCanvasElement | null>(null);
     const fileInputRef = useRef<HTMLInputElement | null>(null);
 
-    // The engine and tool references persist across renders.  The
-    // fillColourRef stores the currently active colour for drawing and
-    // shape fills.  The gradientRef holds the latest gradient
-    // definition to apply when requested.
+    // Persistent state
     const engineRef = useRef<CanvasEngine | null>(null);
     const toolRef = useRef<string | undefined>(selectedTool);
     const fillColourRef = useRef<string>(currentColor || "#111827");
     const gradientRef = useRef<CanvasStageProps["currentGradient"]>(null);
+    const annotatorRef = useRef<{
+      line: fabric.Line;
+      a: fabric.Circle;
+      b: fabric.Circle;
+    } | null>(null);
 
-    // Cropping state.  When cropping is active the user drags out a
-    // rectangle on the canvas.  The cropRectRef stores the Fabric
-    // rectangle used for the overlay.  cropStartRef keeps the
-    // coordinate where the drag started.  croppingFlagRef is a boolean
-    // wrapper used to signal whether cropping is in progress.
+    // Crop state
     const cropRectRef = useRef<fabric.Rect | null>(null);
     const cropStartRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
     const croppingFlagRef = useRef<boolean>(false);
 
-    // Initialise the CanvasEngine and basic handlers once on mount
+    // Text drag-to-area state
+    const textDragRef = useRef<{
+      startX: number;
+      startY: number;
+      dragging: boolean;
+    } | null>(null);
+
+    // Mount: init engine, default content, handlers
     useEffect(() => {
       const wrapEl = wrapRef.current;
       const canvasEl = canvasRef.current;
@@ -135,10 +190,9 @@ const CanvasStage = forwardRef<CanvasStageRef, CanvasStageProps>(
       const bottom = bottomRulerRef.current;
       if (!wrapEl || !canvasEl || !top || !left || !right || !bottom) return;
 
-      // Create a new engine and store it
       const engine = new CanvasEngine({
-        canvasEl: canvasEl,
-        wrapEl: wrapEl,
+        canvasEl,
+        wrapEl,
         rulers: { top, left, right, bottom },
         initialWidth: 800,
         initialHeight: 600,
@@ -146,7 +200,6 @@ const CanvasStage = forwardRef<CanvasStageRef, CanvasStageProps>(
       });
       engineRef.current = engine;
 
-      // Add a default rectangle so the canvas isn't empty
       const defaultRect = new fabric.Rect({
         left: 100,
         top: 100,
@@ -160,19 +213,16 @@ const CanvasStage = forwardRef<CanvasStageRef, CanvasStageProps>(
       engine.canvas.setActiveObject(defaultRect);
       engine.canvas.requestRenderAll();
 
-      // Resize the engine to fit its wrapper and draw rulers
       engine.resizeToWrap();
 
-      // Handler for mouse down events.  Creates shapes/text when not
-      // cropping.  When cropping, it starts drawing the crop rectangle.
-      function handleMouseDown(opt: fabric.IEvent) {
+      // Mouse handlers
+      function handleMouseDown(opt: any) {
         const canvas = engine.canvas;
-        // Ignore clicks on existing objects when adding new ones
-        if (opt.target) return;
+        if (opt.target) return; // don't create over existing objects
         const pointer = canvas.getPointer(opt.e as MouseEvent);
         const { x, y } = pointer;
         const t = toolRef.current;
-        // Begin cropping by creating the overlay rectangle
+
         if (t === "crop") {
           croppingFlagRef.current = true;
           cropStartRef.current = { x, y };
@@ -193,7 +243,6 @@ const CanvasStage = forwardRef<CanvasStageRef, CanvasStageProps>(
           return;
         }
 
-        // For other tools create appropriate objects
         switch (t) {
           case "rect":
           case "rectangle": {
@@ -272,7 +321,9 @@ const CanvasStage = forwardRef<CanvasStageRef, CanvasStageProps>(
             break;
           }
           case "arrow": {
-            const pathData = `M ${x} ${y} L ${x + 120} ${y} M ${x + 100} ${y - 15} L ${x + 120} ${y} L ${x + 100} ${y + 15}`;
+            const pathData = `M ${x} ${y} L ${x + 120} ${y} M ${x + 100} ${
+              y - 15
+            } L ${x + 120} ${y} L ${x + 100} ${y + 15}`;
             const obj = new fabric.Path(pathData, {
               fill: fillColourRef.current,
               stroke: fillColourRef.current,
@@ -305,23 +356,8 @@ const CanvasStage = forwardRef<CanvasStageRef, CanvasStageProps>(
             break;
           }
           case "text": {
-            const obj = new fabric.Textbox("Double-click to edit", {
-              left: x,
-              top: y,
-              width: 200,
-              fill: fillColourRef.current,
-              fontSize: 24,
-              fontFamily: "Inter, sans-serif",
-              editable: true,
-            });
-            canvas.add(obj);
-            canvas.setActiveObject(obj);
-            canvas.requestRenderAll();
-            break;
-          }
-          case "upload": {
-            // In upload mode clicking does not create objects; the file
-            // input is triggered separately via a useEffect.
+            // defer point vs area to mouse up
+            textDragRef.current = { startX: x, startY: y, dragging: false };
             break;
           }
           default:
@@ -329,12 +365,14 @@ const CanvasStage = forwardRef<CanvasStageRef, CanvasStageProps>(
         }
       }
 
-      // Handler for mouse move events during cropping.  Updates the
-      // overlay rectangle as the user drags the pointer.
-      function handleMouseMove(opt: fabric.IEvent) {
+      function handleMouseMove(opt: any) {
         const canvas = engine.canvas;
-        const t = toolRef.current;
-        if (t !== "crop" || !croppingFlagRef.current || !cropRectRef.current) return;
+        if (
+          toolRef.current !== "crop" ||
+          !croppingFlagRef.current ||
+          !cropRectRef.current
+        )
+          return;
         const pointer = canvas.getPointer(opt.e as MouseEvent);
         const { x: startX, y: startY } = cropStartRef.current;
         cropRectRef.current.set({
@@ -344,15 +382,62 @@ const CanvasStage = forwardRef<CanvasStageRef, CanvasStageProps>(
         canvas.requestRenderAll();
       }
 
-      // Handler for mouse up events when cropping.  Finalises the crop
-      // rectangle and replaces the artwork with the cropped snapshot.
-      function handleMouseUp(opt: fabric.IEvent) {
+      function handleMouseUp(opt: any) {
         const canvas = engine.canvas;
-        const t = toolRef.current;
-        if (t !== "crop" || !croppingFlagRef.current || !cropRectRef.current) return;
+
+        // Text: click -> IText, drag -> Textbox
+        if (toolRef.current === "text" && textDragRef.current) {
+          const start = textDragRef.current;
+          const pointer = canvas.getPointer(opt.e as MouseEvent);
+          const dx = Math.abs(pointer.x - start.startX);
+          const dy = Math.abs(pointer.y - start.startY);
+          const dragged = dx > 4 || dy > 4;
+          const forceArea = textMode === "area";
+          const forcePoint = textMode === "point";
+
+          if ((dragged && !forcePoint) || forceArea) {
+            const w = Math.max(40, dx);
+            const h = Math.max(24, dy);
+            const tb = new fabric.Textbox("Type here", {
+              left: Math.min(start.startX, pointer.x),
+              top: Math.min(start.startY, pointer.y),
+              width: w,
+              height: h,
+              fill: fillColourRef.current,
+              fontSize: 24,
+              fontFamily: "Inter, sans-serif",
+              editable: true,
+            });
+            canvas.add(tb);
+            canvas.setActiveObject(tb);
+            canvas.requestRenderAll();
+          } else {
+            const it = new fabric.IText("Type here", {
+              left: start.startX,
+              top: start.startY,
+              fill: fillColourRef.current,
+              fontSize: 24,
+              fontFamily: "Inter, sans-serif",
+              editable: true,
+            });
+            canvas.add(it);
+            canvas.setActiveObject(it);
+            canvas.requestRenderAll();
+          }
+          textDragRef.current = null;
+          return;
+        }
+
+        // Crop finalize
+        if (
+          toolRef.current !== "crop" ||
+          !croppingFlagRef.current ||
+          !cropRectRef.current
+        )
+          return;
         croppingFlagRef.current = false;
+
         const rect = cropRectRef.current;
-        // Normalise the rectangle (fabric may store negative widths/heights)
         let left = rect.left || 0;
         let top = rect.top || 0;
         let width = rect.width || 0;
@@ -365,13 +450,11 @@ const CanvasStage = forwardRef<CanvasStageRef, CanvasStageProps>(
           top += height;
           height = Math.abs(height);
         }
-        // Remove the overlay
+
         canvas.remove(rect);
         cropRectRef.current = null;
         canvas.requestRenderAll();
-        // Export the specified region to an image.  The bleed rectangle
-        // is marked excludeFromExport so it will not appear in the
-        // resulting image.
+
         const dataUrl = canvas.toDataURL({
           format: "png",
           left,
@@ -380,28 +463,28 @@ const CanvasStage = forwardRef<CanvasStageRef, CanvasStageProps>(
           height,
           multiplier: 1,
         });
-        // Remove all objects except those excluded from export (e.g. bleed)
+
         const objects = canvas.getObjects();
         objects.forEach((o) => {
-          if (!(o as any).excludeFromExport) {
-            canvas.remove(o);
-          }
+          if (!(o as any).excludeFromExport) canvas.remove(o);
         });
-        // Add the cropped image at the origin of the crop region
-        fabric.Image.fromURL(dataUrl, (img) => {
-          img.set({ left, top });
-          canvas.add(img);
-          canvas.setActiveObject(img);
-          canvas.requestRenderAll();
-        });
+
+        fabric.Image.fromURL(
+          dataUrl,
+          (img: any) => {
+            img.set({ left, top });
+            canvas.add(img);
+            canvas.setActiveObject(img);
+            canvas.requestRenderAll();
+          },
+          { crossOrigin: "anonymous" } as any
+        );
       }
 
-      // Register handlers
       engine.canvas.on("mouse:down", handleMouseDown as any);
       engine.canvas.on("mouse:move", handleMouseMove as any);
       engine.canvas.on("mouse:up", handleMouseUp as any);
 
-      // Clean up all listeners on unmount
       return () => {
         engine.canvas.off("mouse:down", handleMouseDown as any);
         engine.canvas.off("mouse:move", handleMouseMove as any);
@@ -409,123 +492,305 @@ const CanvasStage = forwardRef<CanvasStageRef, CanvasStageProps>(
         engine.canvas.isDrawingMode = false;
         engine.canvas.dispose();
       };
-    }, []);
+    }, [textMode]);
 
-    // Update tool and drawing mode whenever selectedTool changes
+    // Tool mode toggles drawing & triggers file input for uploads
     useEffect(() => {
       toolRef.current = selectedTool;
       const engine = engineRef.current;
       if (!engine) return;
       const canvas = engine.canvas;
+
       if (selectedTool === "brush") {
         canvas.isDrawingMode = true;
         const brush = canvas.freeDrawingBrush as fabric.PencilBrush;
-        brush.color = fillColourRef.current;
+        brush.color = fillColourRef.current as any;
         brush.width = 4;
       } else {
         canvas.isDrawingMode = false;
       }
-      // Trigger file input when the upload tool becomes active
+
       if (selectedTool === "upload") {
-        // Delay to ensure the ref is set
-        setTimeout(() => {
-          fileInputRef.current?.click();
-        }, 0);
+        setTimeout(() => fileInputRef.current?.click(), 0);
       }
     }, [selectedTool]);
 
-    // Update the stored colour whenever currentColor prop changes
+    // Colour changes: update brush & selected objects immediately
     useEffect(() => {
-      if (currentColor) {
-        fillColourRef.current = currentColor;
-        // Immediately update brush colour if in drawing mode
-        const engine = engineRef.current;
-        if (engine && engine.canvas.isDrawingMode) {
-          const brush = engine.canvas.freeDrawingBrush as fabric.PencilBrush;
-          brush.color = currentColor;
-        }
-        // Apply colour to active objects
-        const canvas = engineRef.current?.canvas;
-        if (canvas) {
-          const active = canvas.getActiveObjects();
-          active.forEach((o) => {
-            (o as any).set({ fill: currentColor });
-          });
-          if (active.length) {
-            canvas.requestRenderAll();
-          }
-        }
+      if (!currentColor) return;
+      fillColourRef.current = currentColor;
+      const engine = engineRef.current;
+      if (!engine) return;
+
+      if (engine.canvas.isDrawingMode) {
+        const brush = engine.canvas.freeDrawingBrush as fabric.PencilBrush;
+        brush.color = currentColor as any;
       }
+      const active = engine.canvas.getActiveObjects();
+      active.forEach((o) => (o as any).set({ fill: currentColor }));
+      if (active.length) engine.canvas.requestRenderAll();
     }, [currentColor]);
 
-    // Update the stored gradient whenever the prop changes
+    // Gradient cache
     useEffect(() => {
       gradientRef.current = currentGradient || null;
     }, [currentGradient]);
 
-    // Handle file input changes for image uploads
+    // Selection change -> emit text style + gradient annotator
+    useEffect(() => {
+      const engine = engineRef.current;
+      if (!engine) return;
+      const canvas = engine.canvas;
+
+      const cleanupAnnotator = () => {
+        if (annotatorRef.current) {
+          const { line, a, b } = annotatorRef.current;
+          canvas.remove(line);
+          canvas.remove(a);
+          canvas.remove(b);
+          annotatorRef.current = null;
+          canvas.requestRenderAll();
+        }
+      };
+
+      const emitTextStyle = () => {
+        const obj = canvas.getActiveObject() as any;
+        if (onTextSelectionChange) {
+          if (obj && obj.text != null) {
+            onTextSelectionChange({
+              fontFamily: obj.fontFamily,
+              fontSize: obj.fontSize,
+              fontWeight: obj.fontWeight,
+              fontStyle: obj.fontStyle,
+              underline: !!obj.underline,
+              textAlign: obj.textAlign,
+            });
+          } else {
+            onTextSelectionChange(null);
+          }
+        }
+      };
+
+      const updateGradientHandles = () => {
+        cleanupAnnotator();
+        if (toolRef.current !== "gradient") return;
+        const obj = canvas.getActiveObject() as any;
+        if (!obj) return;
+        const fill = obj.fill as any;
+        if (!fill || !fill.colorStops || !fill.coords) return;
+
+        const bounds = obj.getBoundingRect(true, true);
+        const c = fill.coords as any;
+        const x1 = (c.x1 ?? 0) + (obj.left || 0);
+        const y1 = (c.y1 ?? 0) + (obj.top || 0);
+        const x2 = (c.x2 ?? bounds.width) + (obj.left || 0);
+        const y2 = (c.y2 ?? 0) + (obj.top || 0);
+
+        const line = new fabric.Line([x1, y1, x2, y2], {
+          stroke: "#8B0000",
+          strokeWidth: 1,
+          selectable: false,
+          evented: false,
+          excludeFromExport: true,
+        });
+        const handleOpts: fabric.ICircleOptions = {
+          radius: 6,
+          fill: "#ffffff",
+          stroke: "#8B0000",
+          strokeWidth: 2,
+          hasControls: false,
+          hasBorders: false,
+          hoverCursor: "grab",
+          excludeFromExport: true,
+        } as any;
+        const a = new fabric.Circle({
+          left: x1 - 6,
+          top: y1 - 6,
+          ...handleOpts,
+        });
+        const b = new fabric.Circle({
+          left: x2 - 6,
+          top: y2 - 6,
+          ...handleOpts,
+        });
+
+        const updateFromHandles = () => {
+          const bounds2 = obj.getBoundingRect(true, true);
+          const lx = (line.get("x1") as number) - (obj.left || 0);
+          const ly = (line.get("y1") as number) - (obj.top || 0);
+          const angle =
+            (Math.atan2(
+              (line.get("y2") as number) - (line.get("y1") as number),
+              (line.get("x2") as number) - (line.get("x1") as number)
+            ) *
+              180) /
+            Math.PI;
+
+          applyGradient({
+            ...(gradientRef.current ||
+              ({ type: "linear", c1: "#ffffff", c2: "#000000" } as any)),
+            origin: { x: lx / bounds2.width, y: ly / bounds2.height },
+            angle,
+            applyTo: (gradientRef.current as any)?.applyTo || "fill",
+          });
+          canvas.requestRenderAll();
+        };
+
+        a.on("moving", () => {
+          line.set({ x1: (a.left || 0) + 6, y1: (a.top || 0) + 6 });
+          updateFromHandles();
+        });
+        b.on("moving", () => {
+          line.set({ x2: (b.left || 0) + 6, y2: (b.top || 0) + 6 });
+          updateFromHandles();
+        });
+
+        [line, a, b].forEach((o) => ((o as any).selectable = false));
+        canvas.add(line);
+        canvas.add(a);
+        canvas.add(b);
+        annotatorRef.current = { line, a, b };
+        canvas.requestRenderAll();
+      };
+
+      const onUpdate = () => {
+        emitTextStyle();
+        updateGradientHandles();
+      };
+
+      canvas.on("selection:created", onUpdate as any);
+      canvas.on("selection:updated", onUpdate as any);
+      canvas.on("selection:cleared", onUpdate as any);
+
+      return () => {
+        canvas.off("selection:created", onUpdate as any);
+        canvas.off("selection:updated", onUpdate as any);
+        canvas.off("selection:cleared", onUpdate as any);
+        cleanupAnnotator();
+      };
+    }, [onTextSelectionChange]);
+
+    // Recreate annotator when switching to/from gradient tool
+    useEffect(() => {
+      const engine = engineRef.current;
+      if (!engine) return;
+      const canvas = engine.canvas;
+      const obj = canvas.getActiveObject();
+      if (selectedTool === "gradient" && obj) {
+        canvas.fire("selection:updated");
+      } else if (selectedTool !== "gradient" && annotatorRef.current) {
+        const { line, a, b } = annotatorRef.current;
+        canvas.remove(line);
+        canvas.remove(a);
+        canvas.remove(b);
+        annotatorRef.current = null;
+        canvas.requestRenderAll();
+      }
+    }, [selectedTool]);
+
+    // Hidden file input → add images
     useEffect(() => {
       const input = fileInputRef.current;
       if (!input) return;
       const handleChange = (e: Event) => {
         const target = e.target as HTMLInputElement;
         const files = Array.from(target.files ?? []);
-        if (!files.length) return;
-        // Add the images via our imperative API
-        addImages(files);
-        // Reset the input so the same file can be selected again
-        target.value = "";
+        if (files.length) addImages(files);
+        target.value = ""; // allow re-selecting same file
       };
       input.addEventListener("change", handleChange);
-      return () => {
-        input.removeEventListener("change", handleChange);
-      };
+      return () => input.removeEventListener("change", handleChange);
     }, []);
 
-    /**
-     * Insert images onto the canvas.  Accepts either File objects or
-     * pre‑existing data URLs.  Images are scaled down if necessary to
-     * maintain a maximum size of 400×400 pixels.
-     */
-    const addImages = (files: File[] | string[]) => {
+    /** Core: add images (Files, URLs, or HTMLImageElements) at default position */
+    const addImages = (items: Array<File | string | HTMLImageElement>) => {
       const engine = engineRef.current;
       if (!engine) return;
       const canvas = engine.canvas;
-      files.forEach((file, index) => {
-        const load = (url: string) => {
-          fabric.Image.fromURL(url, (img) => {
-            // Limit the size to a reasonable maximum
-            const maxDim = 400;
-            const scale = Math.min(1, maxDim / Math.max(img.width || 1, img.height || 1));
-            img.set({
-              left: 80 + index * 20,
-              top: 80 + index * 20,
-              scaleX: scale,
-              scaleY: scale,
-            });
-            canvas.add(img);
-            canvas.setActiveObject(img);
-            canvas.requestRenderAll();
-          });
-        };
-        if (typeof file === "string") {
-          load(file);
+
+      items.forEach(async (item, index) => {
+        let revoke: null | (() => void) = null;
+        let src: string;
+
+        if (typeof item === "string") {
+          src = item; // data:, blob:, http(s)
+        } else if (item instanceof File) {
+          const obj = fileToObjectURL(item);
+          src = obj.url;
+          revoke = obj.revoke;
         } else {
-          const reader = new FileReader();
-          reader.onload = () => {
-            const url = reader.result as string;
-            load(url);
-          };
-          reader.readAsDataURL(file);
+          src = item.src;
+        }
+
+        try {
+          const img = await loadFabricImage(src);
+          const w = img.width ?? MAX_IMG_SIDE;
+          const h = img.height ?? MAX_IMG_SIDE;
+          const scale = Math.min(1, MAX_IMG_SIDE / Math.max(w, h));
+
+          img.set({
+            left: 80 + index * 20,
+            top: 80 + index * 20,
+            selectable: true,
+          });
+          if (scale < 1) img.scale(scale);
+
+          canvas.add(img);
+          canvas.setActiveObject(img);
+          canvas.requestRenderAll();
+        } finally {
+          revoke?.();
         }
       });
     };
 
-    /**
-     * Apply a gradient to all selected objects.  Supports linear
-     * gradients oriented by an angle.  Additional types can be
-     * implemented by extending the switch below.
-     */
+    /** Add images centered around a specific drop-point */
+    const addImagesAt = (
+      x: number,
+      y: number,
+      items: Array<File | string | HTMLImageElement>
+    ) => {
+      const engine = engineRef.current;
+      if (!engine) return;
+      const canvas = engine.canvas;
+
+      items.forEach(async (item, index) => {
+        let revoke: null | (() => void) = null;
+        let src: string;
+
+        if (typeof item === "string") {
+          src = item;
+        } else if (item instanceof File) {
+          const obj = fileToObjectURL(item);
+          src = obj.url;
+          revoke = obj.revoke;
+        } else {
+          src = item.src;
+        }
+
+        try {
+          const img = await loadFabricImage(src);
+          const w = img.width ?? MAX_IMG_SIDE;
+          const h = img.height ?? MAX_IMG_SIDE;
+          const scale = Math.min(1, MAX_IMG_SIDE / Math.max(w, h));
+
+          img.set({
+            left: x + index * 10,
+            top: y + index * 10,
+            selectable: true,
+          });
+          if (scale < 1) img.scale(scale);
+
+          canvas.add(img);
+          canvas.setActiveObject(img);
+          canvas.requestRenderAll();
+        } finally {
+          revoke?.();
+        }
+      });
+    };
+
+    /** Apply gradient to active selection */
     const applyGradient = (options: {
       type: string;
       c1: string;
@@ -533,6 +798,10 @@ const CanvasStage = forwardRef<CanvasStageRef, CanvasStageProps>(
       mid?: number;
       angle?: number;
       opacity?: number;
+      origin?: { x: number; y: number };
+      aspectRatio?: number;
+      reverse?: boolean;
+      applyTo?: "fill" | "stroke" | "both";
     }) => {
       const engine = engineRef.current;
       if (!engine) return;
@@ -540,66 +809,63 @@ const CanvasStage = forwardRef<CanvasStageRef, CanvasStageProps>(
       const active = canvas.getActiveObjects();
       if (!active.length) return;
 
-      // Helper to convert hex colour to RGB components
       const hexToRgb = (hex: string) => {
-        let h = hex.replace('#', '');
-        if (h.length === 3) {
-          h = h[0] + h[0] + h[1] + h[1] + h[2] + h[2];
-        }
+        let h = hex.replace("#", "");
+        if (h.length === 3) h = h[0] + h[0] + h[1] + h[1] + h[2] + h[2];
         const bigint = parseInt(h, 16);
         const r = (bigint >> 16) & 255;
         const g = (bigint >> 8) & 255;
         const b = bigint & 255;
         return { r, g, b };
       };
-      // Helper to convert RGB and alpha to an rgba() string
       const toRgba = (hex: string, alpha: number) => {
         const { r, g, b } = hexToRgb(hex);
         return `rgba(${r}, ${g}, ${b}, ${alpha})`;
       };
-      // Mix two hex colours linearly in RGB space
       const mixColor = (aHex: string, bHex: string, t: number) => {
         const a = hexToRgb(aHex);
         const b = hexToRgb(bHex);
         const r = Math.round(a.r + (b.r - a.r) * t);
         const g = Math.round(a.g + (b.g - a.g) * t);
         const blue = Math.round(a.b + (b.b - a.b) * t);
-        const mixed = `#${[r, g, blue]
-          .map((v) => v.toString(16).padStart(2, '0'))
-          .join('')}`;
-        return mixed;
+        return `#${[r, g, blue]
+          .map((v) => v.toString(16).padStart(2, "0"))
+          .join("")}`;
       };
 
       active.forEach((obj: fabric.Object) => {
         const bounds = obj.getBoundingRect(true, true);
         const width = bounds.width;
         const height = bounds.height;
-        // Default values with sensible fallbacks
-        const type = (options.type || 'linear').toLowerCase();
+        const origin = options.origin || { x: 0, y: 0 };
+        const aspect = Math.max(0.01, options.aspectRatio || 1);
+        const applyTo = options.applyTo || "fill";
+
+        const type = (options.type || "linear").toLowerCase();
         const midPct = options.mid != null ? options.mid : 50;
         const mid = midPct / 100;
         const angleVal = options.angle != null ? options.angle : 0;
         const opacityVal = options.opacity != null ? options.opacity : 100;
         const alpha = opacityVal / 100;
-        const c1Rgba = toRgba(options.c1, alpha);
-        const c2Rgba = toRgba(options.c2, alpha);
-        // Precompute mixed colours used for mid-point and multi-point stops
-        const mixedMidHex = mixColor(options.c1, options.c2, mid);
+        const cStart = options.reverse ? options.c2 : options.c1;
+        const cEnd = options.reverse ? options.c1 : options.c2;
+        const c1Rgba = toRgba(cStart, alpha);
+        const c2Rgba = toRgba(cEnd, alpha);
+        const mixedMidHex = mixColor(cStart, cEnd, mid);
         const mixedMidRgba = toRgba(mixedMidHex, alpha);
 
-        // Determine gradient configuration based on type
         let grad: fabric.Gradient;
-        if (type === 'radial' || type === 'conic') {
-          // Radial gradient from centre to outer edge
+
+        if (type === "radial" || type === "conic") {
           const r2 = Math.max(width, height) / 2;
           grad = new fabric.Gradient({
-            type: 'radial',
+            type: "radial",
             coords: {
-              x1: width / 2,
-              y1: height / 2,
+              x1: width * (origin.x || 0.5),
+              y1: height * (origin.y || 0.5),
               r1: 0,
-              x2: width / 2,
-              y2: height / 2,
+              x2: width * (origin.x || 0.5),
+              y2: height * (origin.y || 0.5),
               r2,
             },
             colorStops: [
@@ -608,17 +874,16 @@ const CanvasStage = forwardRef<CanvasStageRef, CanvasStageProps>(
               { offset: 1, color: c2Rgba },
             ],
           });
-        } else if (type === 'diamond') {
-          // Approximate a diamond gradient using a radial gradient with a smaller radius
-          const r2 = Math.min(width, height) / 2;
+        } else if (type === "diamond") {
+          const r2 = (Math.min(width, height) / 2) * aspect;
           grad = new fabric.Gradient({
-            type: 'radial',
+            type: "radial",
             coords: {
-              x1: width / 2,
-              y1: height / 2,
+              x1: width * (origin.x || 0.5),
+              y1: height * (origin.y || 0.5),
               r1: 0,
-              x2: width / 2,
-              y2: height / 2,
+              x2: width * (origin.x || 0.5),
+              y2: height * (origin.y || 0.5),
               r2,
             },
             colorStops: [
@@ -628,15 +893,15 @@ const CanvasStage = forwardRef<CanvasStageRef, CanvasStageProps>(
             ],
           });
         } else {
-          // All linear variants (linear, reflected, conic, multi-point and unknown)
           const rad = (angleVal * Math.PI) / 180;
-          // Compute vector for linear gradient
-          const x2 = Math.cos(rad) * width;
-          const y2 = Math.sin(rad) * height;
+          const x1 = width * (origin.x || 0.0);
+          const y1 = height * (origin.y || 0.0);
+          const x2 = x1 + Math.cos(rad) * width * aspect;
+          const y2 = y1 + Math.sin(rad) * height;
+
           let colorStops: { offset: number; color: string }[] = [];
-          if (type === 'reflected') {
-            // Mirror around mid-point: c1 -> mix -> c2 -> mix -> c1
-            const mixStartHex = mixColor(options.c1, options.c2, mid);
+          if (type === "reflected") {
+            const mixStartHex = mixColor(cStart, cEnd, mid);
             const mixStartRgba = toRgba(mixStartHex, alpha);
             const mirroredMid = 1 - mid;
             colorStops = [
@@ -645,10 +910,9 @@ const CanvasStage = forwardRef<CanvasStageRef, CanvasStageProps>(
               { offset: mirroredMid, color: mixStartRgba },
               { offset: 1, color: c1Rgba },
             ];
-          } else if (type === 'multi-point' || type === 'multi') {
-            // Multi-point gradient: stops at 0, 0.35, 0.7, 1
-            const mix35Hex = mixColor(options.c1, options.c2, 0.35);
-            const mix70Hex = mixColor(options.c1, options.c2, 0.7);
+          } else if (type === "multi-point" || type === "multi") {
+            const mix35Hex = mixColor(cStart, cEnd, 0.35);
+            const mix70Hex = mixColor(cStart, cEnd, 0.7);
             colorStops = [
               { offset: 0, color: c1Rgba },
               { offset: 0.35, color: toRgba(mix35Hex, alpha) },
@@ -656,35 +920,36 @@ const CanvasStage = forwardRef<CanvasStageRef, CanvasStageProps>(
               { offset: 1, color: c2Rgba },
             ];
           } else {
-            // Default linear or unsupported types: treat as simple linear with optional midpoint
             colorStops = [
               { offset: 0, color: c1Rgba },
               { offset: mid, color: mixedMidRgba },
               { offset: 1, color: c2Rgba },
             ];
           }
+
           grad = new fabric.Gradient({
-            type: 'linear',
-            coords: { x1: 0, y1: 0, x2, y2 },
+            type: "linear",
+            coords: { x1, y1, x2, y2 },
             colorStops,
           });
         }
-        (obj as any).set({ fill: grad });
+
+        if (applyTo === "stroke" || applyTo === "both")
+          (obj as any).set({ stroke: grad });
+        if (applyTo === "fill" || applyTo === "both")
+          (obj as any).set({ fill: grad });
       });
+
       canvas.requestRenderAll();
     };
 
-    /**
-     * Insert a simple template.  You can expand this switch to add
-     * further templates with more complex arrangements.  Templates
-     * consist of a group of objects added at once.
-     */
+    /** Simple templates */
     const insertTemplate = (id: string) => {
       const engine = engineRef.current;
       if (!engine) return;
       const canvas = engine.canvas;
+
       if (id === "tpl-1" || id === "1") {
-        // Create a light background card
         const bg = new fabric.Rect({
           left: 100,
           top: 100,
@@ -711,14 +976,17 @@ const CanvasStage = forwardRef<CanvasStageRef, CanvasStageProps>(
           fontSize: 16,
           fill: "#374151",
         });
-        const group = new fabric.Group([bg, title, subtitle], { left: 80, top: 80 });
+        const group = new fabric.Group([bg, title, subtitle], {
+          left: 80,
+          top: 80,
+        });
         canvas.add(group);
         canvas.setActiveObject(group);
         canvas.requestRenderAll();
         return;
       }
+
       if (id === "tpl-2" || id === "2") {
-        // A second template with a large circle and centred text
         const circle = new fabric.Circle({
           left: 150,
           top: 150,
@@ -737,22 +1005,18 @@ const CanvasStage = forwardRef<CanvasStageRef, CanvasStageProps>(
         canvas.add(group);
         canvas.setActiveObject(group);
         canvas.requestRenderAll();
-        return;
       }
     };
 
-    /**
-     * Finalise cropping manually.  If a crop is in progress this
-     * function will perform the same steps as releasing the mouse in
-     * cropping mode.
-     */
+    /** Finalize crop if active */
     const finalizeCrop = () => {
       const engine = engineRef.current;
       if (!engine) return;
       if (!croppingFlagRef.current || !cropRectRef.current) return;
+
       const canvas = engine.canvas;
-      // Simulate mouse up behaviour
       croppingFlagRef.current = false;
+
       const rect = cropRectRef.current;
       let left = rect.left || 0;
       let top = rect.top || 0;
@@ -766,9 +1030,11 @@ const CanvasStage = forwardRef<CanvasStageRef, CanvasStageProps>(
         top += height;
         height = Math.abs(height);
       }
+
       canvas.remove(rect);
       cropRectRef.current = null;
       canvas.requestRenderAll();
+
       const dataUrl = canvas.toDataURL({
         format: "png",
         left,
@@ -777,43 +1043,112 @@ const CanvasStage = forwardRef<CanvasStageRef, CanvasStageProps>(
         height,
         multiplier: 1,
       });
+
       const objects = canvas.getObjects();
       objects.forEach((o) => {
-        if (!(o as any).excludeFromExport) {
-          canvas.remove(o);
-        }
+        if (!(o as any).excludeFromExport) canvas.remove(o);
       });
-      fabric.Image.fromURL(dataUrl, (img) => {
-        img.set({ left, top });
-        canvas.add(img);
-        canvas.setActiveObject(img);
-        canvas.requestRenderAll();
-      });
+
+      fabric.Image.fromURL(
+        dataUrl,
+        (img: any) => {
+          img.set({ left, top });
+          canvas.add(img);
+          canvas.setActiveObject(img);
+          canvas.requestRenderAll();
+        },
+        { crossOrigin: "anonymous" } as any
+      );
     };
 
-    /**
-     * Expose the imperative API via useImperativeHandle.  The parent
-     * component can call these methods on the ref returned by
-     * useRef().
-     */
+    // External drag & drop on wrapper (single handler to avoid duplicates)
+    useEffect(() => {
+      const wrapEl = wrapRef.current;
+      const engine = engineRef.current;
+      if (!wrapEl || !engine) return;
+
+      const onDragOver = (e: DragEvent) => e.preventDefault();
+      const onDrop = async (e: DragEvent) => {
+        e.preventDefault();
+        const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+        const x = e.clientX - rect.left;
+        const y = e.clientY - rect.top;
+
+        const url =
+          e.dataTransfer?.getData("application/x-cc-image-url") ||
+          e.dataTransfer?.getData("text/uri-list") ||
+          e.dataTransfer?.getData("text/plain");
+
+        const canvas = engine.canvas;
+        const activeObj = canvas.getActiveObject() as any;
+        const useAsPattern =
+          !!activeObj &&
+          (activeObj.type === "rect" ||
+            activeObj.type === "circle" ||
+            activeObj.type === "polygon" ||
+            activeObj.type === "path" ||
+            activeObj.type === "textbox" ||
+            activeObj.type === "i-text");
+
+        if (url) {
+          if (useAsPattern && activeObj) {
+            try {
+              const imgEl = await loadHTMLImage(url);
+              const bounds = activeObj.getBoundingRect(true, true);
+              const patternCanvas = document.createElement("canvas");
+              patternCanvas.width = Math.max(1, Math.round(bounds.width));
+              patternCanvas.height = Math.max(1, Math.round(bounds.height));
+              const ctx = patternCanvas.getContext("2d")!;
+              const scale = Math.min(
+                patternCanvas.width / imgEl.width,
+                patternCanvas.height / imgEl.height
+              );
+              const dw = imgEl.width * scale;
+              const dh = imgEl.height * scale;
+              const dx = (patternCanvas.width - dw) / 2;
+              const dy = (patternCanvas.height - dh) / 2;
+              ctx.drawImage(imgEl, dx, dy, dw, dh);
+              const pat = new (fabric as any).Pattern({
+                source: patternCanvas,
+                repeat: "no-repeat",
+              });
+              activeObj.set({ fill: pat });
+              canvas.requestRenderAll();
+            } catch {
+              /* ignore */
+            }
+          } else {
+            addImagesAt(x, y, [url]);
+          }
+          return;
+        }
+
+        const files = Array.from(e.dataTransfer?.files || []);
+        if (files.length) addImagesAt(x, y, files as File[]);
+      };
+
+      wrapEl.addEventListener("dragover", onDragOver);
+      wrapEl.addEventListener("drop", onDrop);
+      return () => {
+        wrapEl.removeEventListener("dragover", onDragOver);
+        wrapEl.removeEventListener("drop", onDrop);
+      };
+    }, []);
+
+    // Expose imperative API
     useImperativeHandle(ref, () => ({
       setFillColor(hex: string) {
         fillColourRef.current = hex;
-        // Update brush colour if drawing
         const engine = engineRef.current;
-        if (engine && engine.canvas.isDrawingMode) {
+        if (!engine) return;
+
+        if (engine.canvas.isDrawingMode) {
           const brush = engine.canvas.freeDrawingBrush as fabric.PencilBrush;
-          brush.color = hex;
+          brush.color = hex as any;
         }
-        // Apply to active objects
-        const canvas = engineRef.current?.canvas;
-        if (canvas) {
-          const active = canvas.getActiveObjects();
-          active.forEach((o) => {
-            (o as any).set({ fill: hex });
-          });
-          if (active.length) canvas.requestRenderAll();
-        }
+        const active = engine.canvas.getActiveObjects();
+        active.forEach((o) => (o as any).set({ fill: hex }));
+        if (active.length) engine.canvas.requestRenderAll();
       },
       applyGradient(options) {
         applyGradient(options);
@@ -821,8 +1156,11 @@ const CanvasStage = forwardRef<CanvasStageRef, CanvasStageProps>(
       insertTemplate(id) {
         insertTemplate(id);
       },
-      addImages(filesOrUrls) {
-        addImages(filesOrUrls);
+      addImages(items) {
+        addImages(items);
+      },
+      addImagesAt(x, y, items) {
+        addImagesAt(x, y, items);
       },
       finalizeCrop() {
         finalizeCrop();
@@ -830,12 +1168,120 @@ const CanvasStage = forwardRef<CanvasStageRef, CanvasStageProps>(
       getCanvas() {
         return engineRef.current?.canvas ?? null;
       },
+      applyTextStyle(style) {
+        const canvas = engineRef.current?.canvas;
+        if (!canvas) return;
+        const selection = canvas.getActiveObjects();
+        selection.forEach((o) => {
+          if ((o as any).isEditing || (o as any).text != null) {
+            (o as any).set({
+              fontFamily: style.fontFamily ?? (o as any).fontFamily,
+              fontSize: style.fontSize ?? (o as any).fontSize,
+              fontWeight: style.fontWeight ?? (o as any).fontWeight,
+              fontStyle: style.fontStyle ?? (o as any).fontStyle,
+              underline: style.underline ?? (o as any).underline,
+              textAlign: style.textAlign ?? (o as any).textAlign,
+            });
+          }
+        });
+        if (selection.length) canvas.requestRenderAll();
+      },
+      applyTextLayout(mode) {
+        const canvas = engineRef.current?.canvas;
+        if (!canvas) return;
+        if (mode === "point" || mode === "area") return;
+        const sel = canvas.getActiveObjects();
+        if (!sel.length) return;
+        const textObj = sel.find((o: any) => o.text != null) as any;
+        const shapeObj = sel.find((o: any) => o !== textObj) as any;
+        if (!textObj || !shapeObj) return;
+
+        const toPathString = (o: fabric.Object): string | null => {
+          const br = o.getBoundingRect(true, true);
+          const left = o.left || 0;
+          const top = o.top || 0;
+          const x = left;
+          const y = top;
+          const w = br.width;
+          const h = br.height;
+          const type = (o as any).type;
+
+          if (type === "path") {
+            return (
+              (o as any).path?.map((seg: any[]) => seg.join(" ")) || []
+            ).join(" ");
+          }
+          if (type === "circle") {
+            const cx = x + w / 2,
+              cy = y + h / 2;
+            const r = Math.max(w, h) / 2;
+            return `M ${cx - r} ${cy} A ${r} ${r} 0 1 0 ${
+              cx + r
+            } ${cy} A ${r} ${r} 0 1 0 ${cx - r} ${cy} Z`;
+          }
+          if (type === "rect") {
+            const rx = (o as any).rx || 0,
+              ry = (o as any).ry || 0;
+            if (!rx && !ry)
+              return `M ${x} ${y} L ${x + w} ${y} L ${x + w} ${y + h} L ${x} ${
+                y + h
+              } Z`;
+            const r = Math.min(rx || ry || 0, Math.min(w, h) / 2);
+            return `M ${x + r} ${y} L ${x + w - r} ${y} Q ${x + w} ${y} ${
+              x + w
+            } ${y + r} L ${x + w} ${y + h - r} Q ${x + w} ${y + h} ${
+              x + w - r
+            } ${y + h} L ${x + r} ${y + h} Q ${x} ${y + h} ${x} ${
+              y + h - r
+            } L ${x} ${y + r} Q ${x} ${y} ${x + r} ${y} Z`;
+          }
+          if (type === "polygon") {
+            const pts = (o as any).points || [];
+            if (!pts.length) return null;
+            const path = [`M ${x + pts[0].x} ${y + pts[0].y}`].concat(
+              pts.slice(1).map((p: any) => `L ${x + p.x} ${y + p.y}`)
+            );
+            path.push("Z");
+            return path.join(" ");
+          }
+          return null;
+        };
+
+        if (mode === "path") {
+          const d = toPathString(shapeObj);
+          if (!d) return;
+          const p = new fabric.Path(d, {
+            fill: "",
+            stroke: "",
+            selectable: false,
+            evented: false,
+          } as any);
+          (textObj as any).set({ path: p });
+          canvas.requestRenderAll();
+          return;
+        }
+
+        if (mode === "wrap") {
+          const clone = (shapeObj as any).clone() as any;
+          clone.set({
+            absolutePositioned: true,
+            evented: false,
+            selectable: false,
+          });
+          (textObj as any).set({ clipPath: clone });
+          canvas.requestRenderAll();
+        }
+      },
     }));
 
     return (
-      <div ref={wrapRef} className="relative w-full h-full bg-neutral-50 overflow-hidden">
+      <div
+        ref={wrapRef}
+        className="relative w-full h-full bg-neutral-50 overflow-hidden"
+      >
         {/* main drawing surface */}
         <canvas ref={canvasRef} className="absolute inset-0" />
+
         {/* Horizontal rulers */}
         <canvas
           ref={topRulerRef}
@@ -845,6 +1291,7 @@ const CanvasStage = forwardRef<CanvasStageRef, CanvasStageProps>(
           ref={bottomRulerRef}
           className="absolute left-6 right-6 bottom-0 h-6 select-none cursor-default pointer-events-none"
         />
+
         {/* Vertical rulers */}
         <canvas
           ref={leftRulerRef}
@@ -854,7 +1301,8 @@ const CanvasStage = forwardRef<CanvasStageRef, CanvasStageProps>(
           ref={rightRulerRef}
           className="absolute top-6 bottom-6 right-0 w-6 select-none cursor-default pointer-events-none"
         />
-        {/* Hidden file input for uploads */}
+
+        {/* Hidden file input for uploads (triggered when tool === 'upload') */}
         <input
           ref={fileInputRef}
           type="file"

@@ -1,6 +1,7 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useRef } from "react";
+import dynamic from "next/dynamic";
 import LeftSidebar from "@/app/editor/LeftSidebar";
 
 import {
@@ -15,20 +16,22 @@ import {
   ListOrdered,
   Undo2,
   Redo2,
-  Sparkles,
   Home,
 } from "lucide-react";
-// Use our fully featured CanvasStage instead of the simple CanvasLive.  The
-// CanvasStage exposes an imperative API via a ref so we can set colours,
-// apply gradients, insert templates and more from the parent component.
-import CanvasStage, { CanvasStageRef } from "./components/Stage/CanvasStage";
+
+// ✅ Load CanvasStage strictly on the client to avoid SSR/hydration crashes
+const CanvasStage = dynamic(() => import("./components/Stage/CanvasStage"), {
+  ssr: false,
+});
+// Type-only import (erased at runtime)
+import type { CanvasStageRef } from "./components/Stage/CanvasStage";
 
 /* ───────── Header sizing ───────── */
 const HEADER_TOPBAR_PX = 48;
 const HEADER_FORMATBAR_PX = 48;
 const TOTAL_HEADER_OFFSET = HEADER_TOPBAR_PX + HEADER_FORMATBAR_PX;
 
-/* ───────── Top bar ───────── */
+/* ───────── Top bar (unchanged) ───────── */
 const TopBar = () => (
   <div className="sticky top-0 z-50 w-full bg-[#8e0f14] text-white">
     <div className="mx-auto flex max-w-[1600px] items-center justify-between px-3 py-2">
@@ -63,12 +66,56 @@ const TopBar = () => (
   </div>
 );
 
-/* ───────── Format toolbar (updated: only Font Name + "10" are boxed) ───────── */
+/* ───────── Text: Google Font loader ───────── */
+const loadFont = (font: string) => {
+  const formatted = font.replace(/\s+/g, "+");
+  const id = `font-${formatted}`;
+  if (typeof document !== "undefined" && document.getElementById(id)) return;
+
+  const link = document.createElement("link");
+  link.id = id;
+  link.rel = "stylesheet";
+  link.href = `https://fonts.googleapis.com/css2?family=${formatted}:wght@100;200;300;400;500;600;700;800;900&display=swap`;
+  document.head.appendChild(link);
+};
+
+/* ───────── Format toolbar (text-only enhancements) ───────── */
 const BTN =
   "grid h-9 w-9 place-items-center rounded-md text-zinc-700 hover:bg-zinc-200 transition";
 const SEP = <div className="mx-2 h-6 w-px bg-zinc-300/70" />;
 
-const FormatBar = () => (
+const FONT_OPTIONS = [
+  "Inter",
+  "Poppins",
+  "Montserrat",
+  "Verdana",
+  "Helvetica",
+  "Tahoma",
+  "Trebuchet MS",
+  "Times New Roman",
+  "Georgia",
+  "Garamond",
+  "Courier New",
+  "Palatino",
+  "Impact",
+  "Geneva",
+  "Bookman",
+];
+
+const FormatBar = ({
+  textStyle,
+  onTextStyleChange,
+}: {
+  textStyle: {
+    fontFamily?: string;
+    fontSize?: number;
+    fontWeight?: string | number;
+    fontStyle?: string;
+    underline?: boolean;
+    textAlign?: string;
+  } | null;
+  onTextStyleChange: (style: Partial<NonNullable<typeof textStyle>>) => void;
+}) => (
   <div className="sticky z-40" style={{ top: HEADER_TOPBAR_PX }}>
     <div className="mx-auto flex justify-center px-2 pt-1">
       <div
@@ -81,24 +128,45 @@ const FormatBar = () => (
           space-x-1
         "
       >
-        {/* Font name (narrower) */}
-        <select className="h-8 min-w-[110px] rounded-md border border-zinc-300 bg-white px-2 text-xs outline-none">
-          <option>Font Name</option>
-          <option>Inter</option>
-          <option>Poppins</option>
-          <option>Montserrat</option>
+        {/* Font name (expanded) */}
+        <select
+          className="h-8 min-w-[160px] rounded-md border border-zinc-300 bg-white px-2 text-xs outline-none"
+          value={textStyle?.fontFamily || "Inter"}
+          onChange={(e) => onTextStyleChange({ fontFamily: e.target.value })}
+        >
+          {FONT_OPTIONS.map((f) => (
+            <option key={f} value={f}>
+              {f}
+            </option>
+          ))}
         </select>
 
         {/* + 10 – */}
         <div className="ml-1 flex items-center gap-[1px]">
-          <button className={`${BTN} h-8 w-8 text-sm`}>+</button>
+          <button
+            className={`${BTN} h-8 w-8 text-sm`}
+            onClick={() =>
+              onTextStyleChange({ fontSize: (textStyle?.fontSize || 10) + 1 })
+            }
+          >
+            +
+          </button>
           <div className="grid h-8 w-10 place-items-center rounded-md border border-zinc-300 bg-white text-xs">
-            10
+            {textStyle?.fontSize || 10}
           </div>
-          <button className={`${BTN} h-8 w-8 text-sm`}>–</button>
+          <button
+            className={`${BTN} h-8 w-8 text-sm`}
+            onClick={() =>
+              onTextStyleChange({
+                fontSize: Math.max(1, (textStyle?.fontSize || 10) - 1),
+              })
+            }
+          >
+            –
+          </button>
         </div>
 
-        {/* Aa color */}
+        {/* Aa color (UI stub as before) */}
         <button
           className="relative grid h-8 w-10 place-items-center rounded-md text-xs font-semibold hover:bg-zinc-200"
           title="Text color"
@@ -109,29 +177,71 @@ const FormatBar = () => (
 
         {SEP}
 
-        {/* Rest of the icons with smaller buttons */}
-        <button className={`${BTN} h-8 w-8`} title="Bold">
+        <button
+          className={`${BTN} h-8 w-8`}
+          title="Bold"
+          onClick={() =>
+            onTextStyleChange({
+              fontWeight:
+                textStyle?.fontWeight === "bold" ||
+                textStyle?.fontWeight === 700
+                  ? 400
+                  : 700,
+            })
+          }
+        >
           <Bold size={14} />
         </button>
-        <button className={`${BTN} h-8 w-8`} title="Italic">
+        <button
+          className={`${BTN} h-8 w-8`}
+          title="Italic"
+          onClick={() =>
+            onTextStyleChange({
+              fontStyle:
+                textStyle?.fontStyle === "italic" ? "normal" : "italic",
+            })
+          }
+        >
           <Italic size={14} />
         </button>
-        <button className={`${BTN} h-8 w-8`} title="Underline">
+        <button
+          className={`${BTN} h-8 w-8`}
+          title="Underline"
+          onClick={() =>
+            onTextStyleChange({ underline: !textStyle?.underline })
+          }
+        >
           <Underline size={14} />
         </button>
 
         {SEP}
 
-        <button className={`${BTN} h-8 w-8`} title="Align left">
+        <button
+          className={`${BTN} h-8 w-8`}
+          title="Align left"
+          onClick={() => onTextStyleChange({ textAlign: "left" })}
+        >
           <AlignLeft size={14} />
         </button>
-        <button className={`${BTN} h-8 w-8`} title="Align center">
+        <button
+          className={`${BTN} h-8 w-8`}
+          title="Align center"
+          onClick={() => onTextStyleChange({ textAlign: "center" })}
+        >
           <AlignCenter size={14} />
         </button>
-        <button className={`${BTN} h-8 w-8`} title="Align right">
+        <button
+          className={`${BTN} h-8 w-8`}
+          title="Align right"
+          onClick={() => onTextStyleChange({ textAlign: "right" })}
+        >
           <AlignRight size={14} />
         </button>
-        <button className={`${BTN} h-8 w-8`} title="Justify">
+        <button
+          className={`${BTN} h-8 w-8`}
+          title="Justify"
+          onClick={() => onTextStyleChange({ textAlign: "justify" })}
+        >
           <AlignJustify size={14} />
         </button>
 
@@ -161,136 +271,131 @@ const FormatBar = () => (
   </div>
 );
 
-/* ───────── Rulers (exact like mock) ───────── */
-const RULER_STEP = 6; // px between minor ticks
+/* ───────── Right-sidebar: Text tools box (new) ───────── */
+const TextToolsBox = () => {
+  const tabs = [
+    "Text Shape",
+    "Text Shadow",
+    "Transformation",
+    "Decoration",
+  ] as const;
+  const [activeTab, setActiveTab] = useState<(typeof tabs)[number]>(tabs[0]);
 
-const RulerH = () => (
-  <div className="relative h-11 w-full rounded-t-xl bg-white shadow-[inset_0_-1px_0_rgba(0,0,0,0.08)]">
-    {/* minor ticks every 6px */}
-    <div
-      className="absolute inset-0"
-      style={{
-        backgroundSize: `${RULER_STEP}px 100%`,
-        backgroundImage: `repeating-linear-gradient(90deg, rgba(0,0,0,.18) 0 1px, transparent 1px ${RULER_STEP}px)`,
-      }}
-    />
-    {/* medium ticks every 30px */}
-    <div
-      className="absolute inset-x-0 bottom-0 h-3"
-      style={{
-        backgroundSize: `30px 100%`,
-        backgroundImage: `repeating-linear-gradient(90deg, rgba(0,0,0,.26) 0 1px, transparent 1px 30px)`,
-      }}
-    />
-    {/* major ticks every 60px */}
-    <div
-      className="absolute inset-x-0 bottom-0 h-[18px]"
-      style={{
-        backgroundSize: `60px 100%`,
-        backgroundImage: `repeating-linear-gradient(90deg, rgba(0,0,0,.34) 0 1px, transparent 1px 60px)`,
-      }}
-    />
-    {/* red center indicator */}
-    <div className="pointer-events-none absolute left-1/2 top-0 -translate-x-1/2">
-      <div className="mx-auto h-[18px] w-[2px] bg-[#cc1111]" />
-      <div className="mx-auto -mt-[4px] h-0 w-0 border-x-[6px] border-b-[8px] border-x-transparent border-b-[#cc1111]" />
-    </div>
-  </div>
-);
+  return (
+    <section className="mt-7 rounded-[20px] border border-zinc-200 bg-white p-4 shadow-sm overflow-auto max-h-[460px] max-w-full ">
+      <h3 className="text-[13px] font-bold text-zinc-800 mb-3">TEXT</h3>
 
-const RulerV = () => (
-  <div className="relative w-11 rounded-l-xl bg-white shadow-[inset_-1px_0_0_rgba(0,0,0,0.08)]">
-    {/* minor ticks every 6px */}
-    <div
-      className="absolute inset-0"
-      style={{
-        backgroundSize: `100% ${RULER_STEP}px`,
-        backgroundImage: `repeating-linear-gradient(0deg, rgba(0,0,0,.18) 0 1px, transparent 1px ${RULER_STEP}px)`,
-      }}
-    />
-    {/* medium ticks every 30px */}
-    <div
-      className="absolute right-0 top-0 w-3"
-      style={{
-        backgroundSize: `100% 30px`,
-        backgroundImage: `repeating-linear-gradient(0deg, rgba(0,0,0,.26) 0 1px, transparent 1px 30px)`,
-      }}
-    />
-    {/* major ticks every 60px */}
-    <div
-      className="absolute right-0 top-0 w-[18px]"
-      style={{
-        backgroundSize: `100% 60px`,
-        backgroundImage: `repeating-linear-gradient(0deg, rgba(0,0,0,.34) 0 1px, transparent 1px 60px)`,
-      }}
-    />
-    {/* red center indicator */}
-    <div className="pointer-events-none absolute right-0 top-1/2 -translate-y-1/2">
-      <div className="mr-[calc(18px-2px)] h-[2px] w-[18px] bg-[#cc1111]" />
-      <div className="absolute -right-[6px] top-1/2 -translate-y-1/2 -rotate-90 h-0 w-0 border-x-[6px] border-b-[8px] border-x-transparent border-b-[#cc1111]" />
-    </div>
-  </div>
-);
+      <div className="flex flex-wrap gap-2 mb-4">
+        {tabs.map((tab) => (
+          <button
+            key={tab}
+            className={`rounded-full px-3 py-1 text-[12px] font-medium transition whitespace-nowrap ${
+              activeTab === tab
+                ? "bg-zinc-800 text-white"
+                : "bg-zinc-200 text-zinc-700 hover:bg-zinc-300"
+            }`}
+            onClick={() => setActiveTab(tab)}
+          >
+            {tab}
+          </button>
+        ))}
+      </div>
 
-/* ───────── Canvas dashed margin + markers ───────── */
-const Canvas = () => (
-  <center>
-    <div className="ml-92 rounded-xl border border-zinc-200 bg-white shadow-sm">
-      <RulerH />
-      <div className="flex">
-        <RulerV />
-        <div className="relative flex-1 bg-zinc-50">
-          <div className="mx-auto my-10 w-[720px] max-w-[calc(100vw-560px)]">
-            <div className="relative rounded-[12px] p-3">
-              {/* dashed red margin (12px inset) */}
-              <div className="pointer-events-none absolute inset-3 rounded-[12px] border-2 border-dashed border-[#ff3b3b]/90" />
-              {/* artboard */}
-              <div className="rounded-[8px] bg-[url('https://www.transparenttextures.com/patterns/leather.png')] bg-zinc-300 ring-1 ring-zinc-400/40 h-[440px]" />
-              {/* toolbar (unchanged) */}
-              <div className="mx-auto mt-5 flex w-[560px] max-w-full items-center gap-3 rounded-full bg-zinc-200 px-2 py-2 shadow">
-                <button className="grid h-8 w-8 place-items-center rounded-md bg-black text-white text-xs">
-                  ■
-                </button>
-                <button className="grid h-8 w-8 place-items-center rounded-md border border-zinc-300 bg-white text-xs">
-                  □
-                </button>
-                <div className="ml-1 flex items-center overflow-hidden rounded-md border border-zinc-300 bg-white">
-                  <button className="h-8 w-8 text-lg">–</button>
-                  <div className="grid h-8 w-12 place-items-center text-sm">
-                    100
-                  </div>
-                  <button className="h-8 w-8 text-lg">+</button>
-                </div>
+      <div className="rounded-md bg-zinc-50 p-3 text-[12px] text-zinc-700 leading-relaxed space-y-3 overflow-auto max-h-[350px]">
+        {activeTab === "Text Shape" && (
+          <>
+            <label className="block text-xs font-semibold">Shape Style</label>
+            <select className="w-full rounded border border-zinc-300 px-2 py-1 text-sm">
+              <option value="none">None</option>
+              <option value="curve">Curve</option>
+              <option value="arch">Arch</option>
+              <option value="bulge">Bulge</option>
+              <option value="wave">Wave</option>
+            </select>
+          </>
+        )}
+
+        {activeTab === "Text Shadow" && (
+          <>
+            <div>
+              <label className="block text-xs font-semibold">
+                Shadow Color
+              </label>
+              <input type="color" className="w-full h-8 rounded border" />
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              <div>
+                <label className="block text-xs font-semibold">Offset X</label>
                 <input
-                  type="range"
-                  defaultValue={50}
-                  className="h-2 flex-1 appearance-none rounded-full bg-zinc-300 accent-zinc-700"
+                  type="number"
+                  className="w-full rounded border px-2 py-1 text-sm"
+                  defaultValue={0}
                 />
               </div>
-
-              {/* red side markers aligned to dashed box midpoints */}
-              <span className="pointer-events-none absolute left-1/2 top-3 -translate-x-1/2 text-[#c01919]">
-                ▼
-              </span>
-              <span className="pointer-events-none absolute left-1/2 bottom-3 -translate-x-1/2 rotate-180 text-[#c01919]">
-                ▲
-              </span>
-              <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 -rotate-90 text-[#c01919]">
-                ▲
-              </span>
-              <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 rotate-90 text-[#c01919]">
-                ▲
-              </span>
+              <div>
+                <label className="block text-xs font-semibold">Offset Y</label>
+                <input
+                  type="number"
+                  className="w-full rounded border px-2 py-1 text-sm"
+                  defaultValue={0}
+                />
+              </div>
             </div>
-          </div>
-        </div>
-      </div>
-    </div>
-  </center>
-);
+            <div>
+              <label className="block text-xs font-semibold">Blur Radius</label>
+              <input type="range" min="0" max="20" className="w-full" />
+            </div>
+          </>
+        )}
 
-/* ───────── Right preview ───────── */
-const PreviewSidebar = () => (
+        {activeTab === "Transformation" && (
+          <>
+            <label className="block text-xs font-semibold">Text Case</label>
+            <div className="grid grid-cols-2 gap-2">
+              <button className="rounded bg-zinc-200 px-2 py-1 text-xs hover:bg-zinc-300">
+                UPPERCASE
+              </button>
+              <button className="rounded bg-zinc-200 px-2 py-1 text-xs hover:bg-zinc-300">
+                lowercase
+              </button>
+              <button className="rounded bg-zinc-200 px-2 py-1 text-xs hover:bg-zinc-300">
+                Capitalize
+              </button>
+              <button className="rounded bg-zinc-200 px-2 py-1 text-xs hover:bg-zinc-300">
+                None
+              </button>
+            </div>
+          </>
+        )}
+
+        {activeTab === "Decoration" && (
+          <>
+            <label className="block text-xs font-semibold">
+              Text Decoration
+            </label>
+            <div className="grid grid-cols-2 gap-2">
+              <button className="rounded bg-zinc-200 px-2 py-1 text-xs hover:bg-zinc-300">
+                Underline
+              </button>
+              <button className="rounded bg-zinc-200 px-2 py-1 text-xs hover:bg-zinc-300">
+                Overline
+              </button>
+              <button className="rounded bg-zinc-200 px-2 py-1 text-xs hover:bg-zinc-300">
+                Strikethrough
+              </button>
+              <button className="rounded bg-zinc-200 px-2 py-1 text-xs hover:bg-zinc-300">
+                Highlight
+              </button>
+            </div>
+          </>
+        )}
+      </div>
+    </section>
+  );
+};
+
+/* ───────── Right preview (now gates TextToolsBox) ───────── */
+const PreviewSidebar = ({ showTextTools }: { showTextTools: boolean }) => (
   <aside className="hidden lg:block w-[340px] shrink-0 pl-13 -mr-10 -mt-17">
     <div className="sticky" style={{ top: TOTAL_HEADER_OFFSET }}>
       <div
@@ -329,6 +434,9 @@ const PreviewSidebar = () => (
           </div>
         </div>
 
+        {/* Only render when left “TEXT” is open AND text tool is active */}
+        {showTextTools ? <TextToolsBox /> : null}
+
         <div className="mt-auto" />
       </div>
     </div>
@@ -337,10 +445,8 @@ const PreviewSidebar = () => (
 
 /* ───────── Page ───────── */
 export default function Page() {
-  // Track the currently active tool (move, brush, text, etc.).  Shape
-  // identifiers like "rectangle" are treated as tools when inserted.
+  // Tools & panels
   const [selectedTool, setSelectedTool] = useState<string>("move");
-  // UI panel visibility flags
   const [showColorPicker, setShowColorPicker] = useState(false);
   const [showGradientPanel, setShowGradientPanel] = useState(false);
   const [showShapeMenu, setShowShapeMenu] = useState(false);
@@ -350,9 +456,7 @@ export default function Page() {
   const [showUploadsPanel, setShowUploadsPanel] = useState(false);
   const [showBrushPanel, setShowBrushPanel] = useState(false);
 
-  // Current fill colour and gradient.  When these values change we
-  // propagate the update to the canvas via the ref API.  Default
-  // colour matches the Tailwind primary used in the mockup.
+  // Fill & gradient
   const [currentColor, setCurrentColor] = useState<string>("#111827");
   const [currentGradient, setCurrentGradient] = useState<{
     type: string;
@@ -364,17 +468,40 @@ export default function Page() {
     preview?: boolean;
   } | null>(null);
 
-  // Ref to interact with the CanvasStage imperatively
-  const stageRef = React.useRef<CanvasStageRef>(null);
+  // Stage ref & text style
+  const stageRef = useRef<CanvasStageRef>(null);
+  const [textStyleUI, setTextStyleUI] = useState<{
+    fontFamily?: string;
+    fontSize?: number;
+    fontWeight?: string | number;
+    fontStyle?: string;
+    underline?: boolean;
+    textAlign?: string;
+  } | null>(null);
+  const [textMode, setTextMode] = useState<"point" | "area">("point");
 
   return (
     <div className="min-h-screen w-full bg-white text-zinc-900">
       <TopBar />
-      <FormatBar />
+
+      <FormatBar
+        textStyle={textStyleUI}
+        onTextStyleChange={(style) => {
+          const merged = { ...(textStyleUI || {}), ...style };
+
+          // NEW: Load Google Font dynamically when changed
+          if (style.fontFamily) {
+            loadFont(style.fontFamily);
+          }
+
+          setTextStyleUI(merged);
+          stageRef.current?.applyTextStyle(merged);
+        }}
+      />
 
       {/* Fixed left rail */}
       <LeftSidebar
-        offsetTopPx={50} // Reduced from TOTAL_HEADER_OFFSET (96) to move sidebar up
+        offsetTopPx={50}
         selectedTool={selectedTool as any}
         showColorPicker={showColorPicker}
         showGradientPanel={showGradientPanel}
@@ -384,10 +511,14 @@ export default function Page() {
         showLayersPanel={showLayersPanel}
         showUploadsPanel={showUploadsPanel}
         showBrushPanel={showBrushPanel}
+        /* 🔗 keep uploads wired to canvas */
+        onAddImages={(items: Array<File | string>) =>
+          stageRef.current?.addImages(items)
+        }
+        onAddImagesAt={(x: number, y: number, items: Array<File | string>) =>
+          stageRef.current?.addImagesAt(x, y, items)
+        }
         onSelectTool={(id) => {
-          // When a tool (e.g. move, text, crop) is selected we close
-          // any open panels and brush strip.  Shape ids are treated
-          // similarly.
           setSelectedTool(id);
           setShowColorPicker(false);
           setShowShapeMenu(false);
@@ -448,6 +579,15 @@ export default function Page() {
           setShowUploadsPanel(false);
           setShowBrushPanel(false);
         }}
+        onTextLayoutChange={(mode) => {
+          if (mode === "point" || mode === "area") {
+            setSelectedTool("text");
+            setTextMode(mode);
+          }
+          if (mode === "path" || mode === "wrap") {
+            stageRef.current?.applyTextLayout(mode);
+          }
+        }}
         onToggleLayers={() => {
           setShowLayersPanel((s) => !s);
           setShowColorPicker(false);
@@ -467,9 +607,10 @@ export default function Page() {
           setShowTextPanel(false);
           setShowLayersPanel(false);
           setShowBrushPanel(false);
+          // Hint: you can also auto-select the upload tool if you want the file picker:
+          // setSelectedTool("upload");
         }}
         onToggleBrush={() => {
-          // Open or close the brush strip and activate the brush tool
           setShowBrushPanel((s) => !s);
           setSelectedTool("brush");
           setShowColorPicker(false);
@@ -480,28 +621,19 @@ export default function Page() {
           setShowTextPanel(false);
           setShowUploadsPanel(false);
         }}
-        // Colour picker callback applies colour to the canvas and updates state
         onColorChange={(hex) => {
           setCurrentColor(hex);
-          // Immediately apply to the canvas via ref
           stageRef.current?.setFillColor(hex);
         }}
-        // Gradient apply callback uses the ref to apply gradient and store
         onGradientApply={(opts) => {
-          // The gradient panel may include a "preview" flag; we
-          // strip it before saving because the CanvasStage does not
-          // recognise this property.  Only the remaining fields are
-          // stored and applied to the canvas.
           const { preview, ...rest } = opts;
           setCurrentGradient(rest);
           stageRef.current?.applyGradient(rest as any);
         }}
-        // Shape selection inserts a shape by updating the active tool
         onShapeSelect={(shapeId) => {
           setSelectedTool(shapeId as any);
           setShowShapeMenu(false);
         }}
-        // Template selection inserts a template group
         onTemplateSelect={(tplId) => {
           stageRef.current?.insertTemplate(tplId);
           setShowTemplatesPanel(false);
@@ -511,11 +643,11 @@ export default function Page() {
       {/* left padding equals rail width so content never hides under it */}
       <main
         className="
-    flex w-full h-[calc(100vh-96px)]
-    max-w-[1600px] mx-auto
-    bg-gray-200 px-6 md:px-10 pb-24 pt-4
-    pl-[64px]   /* ← match LeftSidebar width */
-  "
+          flex w-full h-[calc(100vh-96px)]
+          max-w-[1600px] mx-auto
+          bg-gray-200 px-6 md:px-10 pb-24 pt-4
+          pl-[64px]
+        "
       >
         <div className="flex flex-1 items-center justify-center min-w-0">
           {/* Render the CanvasStage and provide imperative access via the ref */}
@@ -525,10 +657,16 @@ export default function Page() {
               selectedTool={selectedTool}
               currentColor={currentColor}
               currentGradient={currentGradient}
+              textMode={textMode}
+              onTextSelectionChange={(style) => setTextStyleUI(style)}
             />
           </div>
         </div>
-        <PreviewSidebar />
+
+        {/* NEW: show text tools only when TEXT panel is open and text tool is active */}
+        <PreviewSidebar
+          showTextTools={showTextPanel && selectedTool === "text"}
+        />
       </main>
     </div>
   );

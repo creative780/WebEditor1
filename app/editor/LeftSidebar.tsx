@@ -18,6 +18,7 @@ import {
   ChevronDown,
   Search,
 } from "lucide-react";
+import UploadsPanelDocked from "@/app/components/uploads/UploadsPanelDocked";
 
 /* ================== Color helpers ================== */
 const clamp = (n: number, min = 0, max = 1) => Math.min(max, Math.max(min, n));
@@ -112,7 +113,6 @@ function buildGradientCss(
     case "Diamond":
       return `radial-gradient(closest-side at 50% 50%, ${list})`;
     case "Reflected": {
-      // Mirror the stops around center for a symmetric look
       const mirror = sorted
         .slice(0, sorted.length - 1)
         .concat(
@@ -126,7 +126,6 @@ function buildGradientCss(
       return `linear-gradient(${angle}deg, ${mirroredList})`;
     }
     case "Multi-Point":
-      // treat as multi-stop linear; UI manages as many stops as the user wants.
       return `linear-gradient(${angle}deg, ${list})`;
     default:
       return `linear-gradient(${angle}deg, ${list})`;
@@ -194,6 +193,13 @@ interface LeftSidebarProps {
   /** Callback when a template is selected.  The template id is passed. */
   onTemplateSelect?: (templateId: string) => void;
 
+  /** 🔗 NEW: wire uploads → canvas */
+  onAddImages?: (items: Array<File | string>) => void;
+  onAddImagesAt?: (x: number, y: number, items: Array<File | string>) => void;
+
+  /** 🔤 Text layout mode from TEXT panel */
+  onTextLayoutChange?: (mode: "point" | "area" | "path" | "wrap") => void;
+
   offsetTopPx?: number;
 }
 
@@ -230,6 +236,9 @@ export default function LeftSidebar({
   onGradientApply,
   onShapeSelect,
   onTemplateSelect,
+  onAddImages,
+  onAddImagesAt,
+  onTextLayoutChange, // 👈 added
 }: LeftSidebarProps) {
   const items: Array<{
     id: ToolId;
@@ -251,14 +260,14 @@ export default function LeftSidebar({
 
   const isActive = (id: ToolId) =>
     selectedTool === id ||
-    (id === "brush" && showBrushPanel) || // NEW
+    (id === "brush" && showBrushPanel) ||
     (id === "layers" && showLayersPanel) ||
     (id === "color" && showColorPicker) ||
     (id === "gradient" && showGradientPanel) ||
     (id === "shapes" && showShapeMenu) ||
     (id === "templates" && showTemplatesPanel) ||
-    (id === "text" && showTextPanel) ||
-    (id === "upload" && showUploadsPanel);
+    (id === "upload" && showUploadsPanel) ||
+    (id === "text" && showTextPanel);
 
   // anchor for panel (page coords)
   const [panelTopAnchor, setPanelTopAnchor] = React.useState<number | null>(
@@ -277,7 +286,7 @@ export default function LeftSidebar({
     switch (id) {
       case "brush":
         onToggleBrush?.();
-        return; // NEW
+        return;
       case "color":
         onToggleColor?.();
         return;
@@ -372,7 +381,7 @@ export default function LeftSidebar({
 
   // Calculate which panels are open to determine vertical stacking
   const openPanels = [
-    showBrushPanel && "brush", // include brush for stacking order reference
+    showBrushPanel && "brush",
     showColorPicker && "color",
     showLayersPanel && "layers",
     showTextPanel && "text",
@@ -400,10 +409,6 @@ export default function LeftSidebar({
   const currentRgb = useRGB ? rgb : cmykToRgb(cmyk.c, cmyk.m, cmyk.y, cmyk.k);
   const currentHex = rgbToHex(currentRgb.r, currentRgb.g, currentRgb.b);
 
-  // When the RGB/CMYK values change and the colour picker is visible
-  // notify the parent through onColorChange.  We only fire when
-  // showColorPicker is true so that initialising the sidebar does not
-  // override external state.
   React.useEffect(() => {
     if (showColorPicker && onColorChange) {
       onColorChange(currentHex);
@@ -411,6 +416,24 @@ export default function LeftSidebar({
   }, [showColorPicker, currentHex, onColorChange]);
 
   const demoLayers = Array.from({ length: 9 }, (_, i) => `Layer ${i + 1}`);
+
+  /* ================= Upload wiring helpers ================= */
+  const hiddenFileRef = React.useRef<HTMLInputElement | null>(null);
+
+  const handleFileInput = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files || []);
+    if (files.length) onAddImages?.(files);
+    // allow picking same file again
+    e.target.value = "";
+  };
+
+  const handleDropFiles = (e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    const files = Array.from(e.dataTransfer.files || []);
+    if (files.length) onAddImages?.(files);
+  };
+
+  /* ======================================================== */
 
   return (
     <>
@@ -453,6 +476,16 @@ export default function LeftSidebar({
             );
           })}
         </div>
+
+        {/* Hidden file input for quick adds (optional) */}
+        <input
+          ref={hiddenFileRef}
+          type="file"
+          accept="image/*"
+          multiple
+          className="hidden"
+          onChange={handleFileInput}
+        />
       </aside>
 
       {/* ===== BRUSH strip (fixed position, same place always) ===== */}
@@ -776,13 +809,23 @@ export default function LeftSidebar({
                   icon={<PointTextIcon />}
                   labelTop="POINT"
                   labelBottom="TEXT"
+                  onClick={() => onTextLayoutChange?.("point")}
                 />
-                <Tile icon={<AreaTextIcon />} labelTop="AREA" />
-                <Tile icon={<PathTextIcon />} labelTop="PATH" />
+                <Tile
+                  icon={<AreaTextIcon />}
+                  labelTop="AREA"
+                  onClick={() => onTextLayoutChange?.("area")}
+                />
+                <Tile
+                  icon={<PathTextIcon />}
+                  labelTop="PATH"
+                  onClick={() => onTextLayoutChange?.("path")}
+                />
                 <Tile
                   icon={<WrapTextIcon />}
                   labelTop="WRAP"
                   labelBottom="TEXT"
+                  onClick={() => onTextLayoutChange?.("wrap")}
                 />
               </div>
 
@@ -871,7 +914,7 @@ export default function LeftSidebar({
                 <div className="text-[26px] leading-none font-semibold tracking-wide text-[#8d8d8d]">
                   Shapes
                 </div>
-                <div className="mt-2 w-14 h-[2px] bg-white/70 rounded-full" />
+                <div className="mt-2 w-14 h-[2px] bg.white/70 rounded-full" />
               </div>
 
               {/* Items */}
@@ -935,6 +978,8 @@ export default function LeftSidebar({
               height: `calc(100vh - ${offsetTopPx}px)`,
               marginLeft: showUploadsPanel ? PANEL_GAP : 0,
             }}
+            onDrop={handleDropFiles}
+            onDragOver={(e) => e.preventDefault()}
           >
             <TemplatesPanelDocked onTemplateSelect={onTemplateSelect} />
           </div>,
@@ -947,11 +992,11 @@ export default function LeftSidebar({
         createPortal(
           <div
             className="
-              fixed z-[60]
-              bg-[#e8e8e8] border-l border-[#bdbdbd]
-              text-black
-              flex flex-col
-            "
+        fixed z-[60]
+        bg-[#e8e8e8] border-l border-[#bdbdbd]
+        text-black
+        flex flex-col
+      "
             style={{
               left:
                 RAIL_W +
@@ -961,8 +1006,22 @@ export default function LeftSidebar({
               width: 270,
               height: `calc(100vh - ${offsetTopPx}px)`,
             }}
+            /* Make the whole dock a dropzone for quick add-to-canvas */
+            onDrop={handleDropFiles}
+            onDragOver={(e) => e.preventDefault()}
           >
-            <UploadsPanelDocked />
+            {/* If your UploadsPanelDocked supports callbacks, pass them through */}
+            <UploadsPanelDocked
+              {...{
+                // These props are safe: component will ignore if not defined
+                onAddImages,
+                onAddImagesAt,
+                onPickFiles: (files: File[]) => onAddImages?.(files),
+                onPickUrl: (url: string) => onAddImages?.([url]),
+                // Optional: expose a button in that panel to trigger native picker
+                onOpenFilePicker: () => hiddenFileRef.current?.click(),
+              }}
+            />
           </div>,
           document.body
         )}
@@ -1041,98 +1100,6 @@ function TemplatesPanelDocked({
               <div className="mt-2 h-[120px] rounded-[6px] bg-white border border-[#d6d6d6]" />
               <div className="mt-2 mx-10 h-[2px] rounded-full bg-[#e0e0e0]" />
             </button>
-          ))}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function UploadsPanelDocked() {
-  const [files, setFiles] = React.useState<Array<{ id: string; url?: string }>>(
-    Array.from({ length: 12 }, (_, i) => ({ id: `slot-${i + 1}` }))
-  );
-  const fileInputRef = React.useRef<HTMLInputElement | null>(null);
-
-  const onPickFiles = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const list = Array.from(e.target.files ?? []);
-    if (!list.length) return;
-
-    const next: Array<{ id: string; url?: string }> = [...files];
-    for (const f of list) {
-      const url = URL.createObjectURL(f);
-      const idx = next.findIndex((x) => !x.url);
-      if (idx >= 0) next[idx] = { id: next[idx].id, url };
-      else next.push({ id: crypto.randomUUID(), url });
-    }
-    setFiles(next);
-    e.target.value = "";
-  };
-
-  const removeAt = (id: string) => {
-    setFiles((prev) => prev.map((x) => (x.id === id ? { id } : x)));
-  };
-
-  return (
-    <div className="h-full flex flex-col">
-      <div className="px-3 pt-3 pb-2">
-        <div className="text-[18px] font-semibold text-[#7b7b7b] text-center">
-          Uploads
-        </div>
-      </div>
-
-      <div className="px-3">
-        <button
-          onClick={() => fileInputRef.current?.click()}
-          className="w-full h-8 rounded-[6px] text-white text-[12px] font-semibold shadow-sm"
-          style={{ background: "#8B0000" }}
-        >
-          UPLOAD NEW FILE
-        </button>
-        <input
-          ref={fileInputRef}
-          type="file"
-          accept="image/*"
-          multiple
-          className="hidden"
-          onChange={onPickFiles}
-        />
-      </div>
-
-      <div className="mt-3 flex-1 overflow-y-auto px-3 pb-3">
-        <div className="grid grid-cols-2 gap-3">
-          {files.map((item) => (
-            <div
-              key={item.id}
-              className="relative rounded-[6px] bg-white border border-[#d6d6d6] h-[108px] overflow-hidden"
-              title={item.url ? "Uploaded file" : "Empty slot"}
-            >
-              <label className="absolute left-2 top-2">
-                <input
-                  type="checkbox"
-                  className="h-[14px] w-[14px] rounded-[3px] border border-black/70 accent-black"
-                />
-              </label>
-              <button
-                onClick={() => removeAt(item.id)}
-                className="absolute right-2 top-2 p-1 rounded hover:bg-[#f1f1f1]"
-                title="Delete"
-                aria-label="Delete"
-              >
-                <Trash2 className="w-4 h-4 text-black" />
-              </button>
-              {item.url ? (
-                <img
-                  src={item.url}
-                  alt=""
-                  className="absolute inset-0 h-full w-full object-cover"
-                />
-              ) : (
-                <div className="absolute inset-0 grid place-items-center">
-                  <div className="h-6 w-6 rounded bg-[#efefef]" />
-                </div>
-              )}
-            </div>
           ))}
         </div>
       </div>
@@ -1258,7 +1225,7 @@ function TemplatesPanel({
             {filtered.map((t) => (
               <button
                 key={t.id}
-                className="group rounded-md border border-[#d0d0d0] bg-white overflow-hidden hover:shadow transition"
+                className="group rounded-md border border-[#d0d0d0] bg.white overflow-hidden hover:shadow transition"
                 onClick={() => {
                   onTemplateSelect?.(t.id);
                 }}
@@ -1268,7 +1235,7 @@ function TemplatesPanel({
                   className="aspect-[4/3] w-full"
                   style={{ background: t.bg }}
                 />
-                <div className="px-2 py-1 text-[11px] text-left truncate">
+                <div className="px-2 py-1 text-[11px] text.left truncate">
                   {t.name}
                 </div>
                 <div className="px-2 pb-2">
@@ -1316,7 +1283,7 @@ function Swatch({
   return (
     <button
       onClick={() => onPick?.(color)}
-      className="h-6 w-6 rounded-full border border-black/20"
+      className="h-6 w-6 rounded-full border border.black/20"
       style={{ backgroundColor: color }}
       title={color}
     />
@@ -1408,13 +1375,16 @@ function Tile({
   icon,
   labelTop,
   labelBottom,
+  onClick,
 }: {
   icon: React.ReactNode;
   labelTop: string;
   labelBottom?: string;
+  onClick?: () => void;
 }) {
   return (
     <button
+      onClick={onClick}
       className="group grid justify-items-center gap-1 rounded-md px-1 py-2 hover:bg.white/60 transition"
       title={`${labelTop}${labelBottom ? ` ${labelBottom}` : ""}`}
     >
@@ -1945,7 +1915,7 @@ function GradientStopsBar({
         })}
       </div>
       <div className="mt-1 text-[10px] text-[#737373]">
-        Tip: double‑click a stop (except ends) to remove.
+        Tip: double-click a stop (except ends) to remove.
       </div>
     </div>
   );
@@ -2041,7 +2011,6 @@ function SquareColor({
 }
 
 function MiniSlash() {
-  // Simple neutral divider; removes the previous purple SVG bleed
   return <div className="h-10 w-[1px] bg-[#d5d5d5] mx-1" />;
 }
 
